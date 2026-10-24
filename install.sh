@@ -25,7 +25,7 @@ M=$APP.new/Contents/Resources/plugin; mkdir -p $M/.claude-plugin; cp -R plugin $
 print '{"name":"claudetty","owner":{"name":"ClaudeTTY"},"plugins":[{"name":"claudetty","source":"./claudetty"}]}' > $M/.claude-plugin/marketplace.json
 plutil -replace version -string $(cd plugin && find . -type f | sort | xargs cat | shasum | cut -c1-12) $M/claudetty/.claude-plugin/plugin.json
 P=$APP.new/Contents/Info.plist; plutil -create xml1 $P
-for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.0.0 CFBundleVersion 1 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
+for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.1.0 CFBundleVersion 2 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
 [[ -n ${CLAUDETTY_RELEASE-} ]] || plutil -insert ClaudeTTYSource -string $PWD $P
 for k in AppBundles AppData AppleEvents AppleMusic AudioCapture BluetoothAlways BluetoothWhileInUse Calendars CalendarsFullAccess CalendarsWriteOnlyAccess \
   Camera Contacts DesktopFolder DocumentsFolder DownloadsFolder FaceID FileProviderDomain FileProviderPresence FinancialData FocusStatus HomeKit LocalNetwork \

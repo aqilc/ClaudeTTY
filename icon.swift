@@ -29,7 +29,7 @@ func draw() {
     NSGraphicsContext.restoreGraphicsState()
     NSGraphicsContext.saveGraphicsState(); squircle(body, 185).addClip()
     NSGradient(starting: NSColor(white: 0.11, alpha: 1), ending: NSColor(white: 0.05, alpha: 1))!.draw(in: body, angle: -90)
-    NSGradient(colors: [rgb(150, 52, 30).withAlphaComponent(0.75), ember.withAlphaComponent(0.75), rgb(20, 8, 6).withAlphaComponent(0.75), .clear], atLocations: [0, 0.3, 0.7, 1], colorSpace: .sRGB)!
+    NSGradient(colors: [rgb(150, 52, 30).withAlphaComponent(0.45), ember.withAlphaComponent(0.45), rgb(20, 8, 6).withAlphaComponent(0.45), .clear], atLocations: [0, 0.3, 0.7, 1], colorSpace: .sRGB)!
         .draw(fromCenter: NSPoint(x: body.midX, y: body.minY - 40), radius: 0, toCenter: NSPoint(x: body.midX, y: body.minY - 40), radius: body.height * 1.05, options: [])
     NSGraphicsContext.restoreGraphicsState()
     let center = NSPoint(x: 400, y: 540), cursor = NSRect(x: 620, y: 340, width: 190, height: 56)

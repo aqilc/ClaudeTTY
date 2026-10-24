@@ -36,7 +36,7 @@ For the same reason pull requests are turned off on this repo. If you want it to
     </td>
     <td width="50%" valign="top">
       <img src="media/survive.gif" alt="The app is killed and reopened with every tab still running">
-      <p><b>You can't lose something if you want to.</b> Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and your tabs are all still there, and any Claude that was working keeps working.</p>
+      <p><b>You can't lose something if you want to.</b> Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and your tabs are all still there, and any Claude that was working keeps working. Same when Claude Code auto-updates, the Claudes you already had open stay up and ClaudeTTY still tracks them.</p>
     </td>
   </tr>
   <tr>
@@ -46,7 +46,7 @@ For the same reason pull requests are turned off on this repo. If you want it to
     </td>
     <td width="50%" valign="top">
       <img src="media/mod.gif" alt="Editing the source, running install.sh, and the open app switching to the new build">
-      <p><b>Change it yourself.</b> The whole app is about 4,800 lines of Swift in three files. Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</p>
+      <p><b>Change it yourself.</b> The whole app is about 5,500 lines of Swift in three files. Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</p>
     </td>
   </tr>
   <tr>
@@ -83,6 +83,9 @@ For the same reason pull requests are turned off on this repo. If you want it to
 - <kbd>⌘</kbd><kbd>P</kbd> <kbd>↩</kbd> takes you back to the tab you were just in, basically <kbd>⌘</kbd><kbd>Tab</kbd> for tabs.
 - If you right-click a group and pick Sort by State, waiting groups stay at the top in the sidebar.
 - Holding <kbd>⌃</kbd> shows each tab's number.
+- <kbd>⌘</kbd><kbd>⇧</kbd><kbd>T</kbd> reopens the last tab you closed, in the same group and spot. A Claude tab resumes its conversation with the same flags it was started with, and a shell gets its folder and scrollback back.
+- Groups can go in folders (right-click a group, Move to Folder). Clicking a folder collapses it, and that's all a folder does, it's just for sorting.
+- It updates itself. It checks GitHub at launch and once a day, downloads the new version in the background and waits for you to pick Restart to Update in the ClaudeTTY menu.
 - If you answer a permission prompt from somewhere else, the notification goes away on its own instead of sitting there forever.
 - Shell tabs come back scrolled to where you left them after an update, not dumped at the bottom.
 - Closing a tab first tells you what's still running in it, like the Claude, its agents and shells, and how long each job's been going.

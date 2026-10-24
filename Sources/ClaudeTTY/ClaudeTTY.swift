@@ -86,6 +86,7 @@ struct Tab: Equatable, Codable {
     }
 
     var transcript: String? { try? String(contentsOfFile: statusDir + "/" + name + ".transcript", encoding: .utf8) }
+    var session: String? { transcript.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension } }
 }
 
 let stamps = { let format = ISO8601DateFormatter(); format.formatOptions.insert(.withFractionalSeconds); return format }()
@@ -183,7 +184,15 @@ func isClaude(_ pid: Int32) -> Bool {
     guard let front = foreground(pid) else { return false }
     var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
     proc_pidpath(front, &path, UInt32(path.count))
-    return String(cString: path).contains("/claude/versions/")
+    return String(cString: path).contains("/claude/versions/") || path[0] == 0 && started(front)?.strings.first?.hasSuffix("/claude") == true
+}
+
+func started(_ pid: Int32) -> (count: Int, strings: [String])? {
+    var mib = [CTL_KERN, KERN_PROCARGS2, pid], size = 0
+    guard sysctl(&mib, 3, nil, &size, nil, 0) == 0 else { return nil }
+    var buffer = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > 4 else { return nil }
+    return (buffer.withUnsafeBytes { Int($0.load(as: Int32.self)) }, buffer[4..<size].split(separator: 0).map { String(decoding: $0, as: UTF8.self) })
 }
 
 @main
@@ -199,7 +208,9 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private static let secureKey = "secure keyboard entry " + zmxDir
     private var securing = false
     private static let sortKey = "sort by state " + zmxDir
+    private static let collapsedKey = "collapsed folders " + zmxDir
     private static let buttonsKey = "hide pane buttons " + zmxDir
+    private static let askKey = "claude asks permission " + zmxDir
     private static let contextKey = "hide context size " + zmxDir
     private static let lookKey = "look " + zmxDir
     private static let lookDefaults = ["cursor-style": "block", "cursor-style-blink": "", "background-opacity": "1", "background-blur": "0", "window-padding-x": "1", "window-padding-y": "0,4"]
@@ -216,6 +227,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private let titleHover = BarHover()
     private var surfaces: [String: SurfaceView] = [:]
     private var commands: [String: [String]] = [:]
+    private var closedTabs: [(tab: Tab, index: Int, command: [String]?, history: Data?)] = []
     private let sidebar = NSStackView()
     private let tabBar = NSStackView()
     private let terminal = NSView()
@@ -232,6 +244,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var probeDrag = NSPoint.zero
     private var claudeExits: [Int32: DispatchSourceProcess] = [:]
     private var activities: [String: ActivityView] = [:]
+    private var groupRows: [String: Row] = [:]
+    private var folderRows: [String: Row] = [:]
     private var replies: [String: (stamp: Date, reply: (text: String, at: Date)?)] = [:]
     private var transcripts: [String: (path: String, watch: DispatchSourceFileSystemObject)] = [:]
     private var fronts: [String] = []
@@ -252,8 +266,11 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private static let port = "dev.claudetty.app" + (probe.map { "." + $0 } ?? "") as CFString
     private static var server: CFMessagePort?
     private static let keeperPort = "dev.claudetty.keeper" as CFString
-    private static let kept: Set = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING", "ZMX_DIR", "CLAUDETTY_PROBE"]
+    private static let kept: Set = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING", "ZMX_DIR", "CLAUDETTY_PROBE", "CLAUDETTY_RELEASES"]
     private static let executable = URL(fileURLWithPath: Bundle.main.executablePath!).resolvingSymlinksInPath().path
+    private static let bundle = URL(fileURLWithPath: executable).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
+    private static let released = bundle.hasSuffix(".app") && Bundle(path: bundle)?.object(forInfoDictionaryKey: "ClaudeTTYSource") == nil
+    private static let releases = ProcessInfo.processInfo.environment["CLAUDETTY_RELEASES"] ?? "https://api.github.com/repos/aqilc/ClaudeTTY/releases/latest"
     private static var build: Int? { (try? FileManager.default.attributesOfItem(atPath: executable))?[.systemFileNumber] as? Int }
     private var running = ClaudeTTY.build
     private struct State: Codable {
@@ -271,6 +288,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var normalFrame = NSRect.zero
     private var menuMarks: [(item: NSMenuItem, mark: String)] = []
     private var menuTimer: Timer?
+    private enum Swap { case running, failed, ready }
+    private var newer: (version: String, page: URL, swap: Swap)?
     private var updateWait: Timer?
     private struct Notice: Equatable { let text: String, at: Date; var bannered: Bool }
     private var notices: [String: Notice] = [:]
@@ -465,7 +484,6 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private static func reload() -> Int32 {
-        let bundle = URL(fileURLWithPath: executable).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
         let source = CommandLine.arguments.dropFirst(2).first ?? Bundle(path: bundle)?.object(forInfoDictionaryKey: "ClaudeTTYSource") as? String
         guard bundle.hasSuffix(".app"), let script = source.flatMap({ [$0, $0 + "/app/apple/ClaudeTTY"].map { $0 + "/install.sh" }.first { access($0, X_OK) == 0 } }) else { return failed("reload <path to a ClaudeTTY checkout>") }
         setenv("APP", bundle, 1)
@@ -567,7 +585,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
 
         tabs = Self.sessions()
         let restored = Self.saved?.boot == Self.boot ? [] : (Self.saved?.kept ?? []).filter { !tabs.contains($0) }
-        for tab in restored { commands[tab.name] = Self.saved?.resume?[tab.name].map { Self.claude("--resume " + $0) } }
+        for tab in restored { commands[tab.name] = Self.saved?.resume?[tab.name].map { Self.claude("--dangerously-skip-permissions --resume " + $0) } }
         tabs += restored
         hidden = predecessor?.hidden ?? false
         if let old = predecessor?.pid {
@@ -615,6 +633,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             watch.resume()
             return watch
         }
+        if Self.released {
+            checkUpdates()
+            Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { [unowned self] _ in checkUpdates() }.tolerance = 3600
+        }
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [unowned self] _ in if drawing { activities.keys.forEach(redraw) } }.tolerance = 10
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [unowned self] _ in update() }
         NSApp.mainMenu = menu()
@@ -624,7 +646,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
 
     private func update() {
         let build = Self.build
-        guard build != nil, build != running else { return }
+        guard build != nil, build != running, newer == nil else { return }
         guard hidden || window.isOnActiveSpace && !window.isMiniaturized else {
             if updateWait == nil { updateWait = .scheduledTimer(withTimeInterval: probe == nil ? 600 : 1, repeats: false) { [unowned self] in
                 $0.invalidate()
@@ -650,6 +672,48 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 NSApp.terminate(nil)
             }
         }
+    }
+
+    private func checkUpdates(manual: Bool = false) {
+        URLSession.shared.dataTask(with: URL(string: Self.releases)!) { data, _, _ in
+            struct Release: Decodable { struct Asset: Decodable { let name: String, browser_download_url: String }; let tag_name: String, html_url: URL, assets: [Asset] }
+            let release = data.flatMap { try? JSONDecoder().decode(Release.self, from: $0) }
+            DispatchQueue.main.async { [self] in
+                let current = Bundle(path: Self.bundle)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+                guard newer == nil, let release, let dmg = release.assets.first(where: { $0.name == "ClaudeTTY.dmg" }) else { return manual && newer == nil ? tell("Couldn't check for updates.") : () }
+                let version = String(release.tag_name.drop { $0 == "v" })
+                guard version.compare(current, options: .numeric) == .orderedDescending else { return manual ? tell("ClaudeTTY \(current) is the newest version.") : () }
+                newer = (version, release.html_url, .running)
+                let swap = Process()
+                swap.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                swap.arguments = ["-c", """
+                    set -e; T=$(mktemp -d); trap 'hdiutil detach -quiet -force $T/m 2>/dev/null; rm -rf $T' EXIT
+                    curl -fsSL -o $T/d.dmg "$1"; hdiutil attach -quiet -nobrowse -noautoopen -readonly -mountpoint $T/m $T/d.dmg
+                    R=$(codesign -d -r- "$2" 2>/dev/null | sed -n 's/^designated =>
+                    rm -rf "${2:?}.new" "$2.old"; ditto $T/m/ClaudeTTY.app "$2.new"; mv "$2" "$2.old"; mv "$2.new" "$2" || { mv "$2.old" "$2"; exit 1; }; rm -rf "$2.old"
+                    [[ -z $3 ]] || launchctl kickstart -k gui/$UID/$3 2>/dev/null || true
+                    """, "zsh", dmg.browser_download_url, Self.bundle, probe == nil ? "dev.claudetty.keeper" : ""]   // a probe's app has no keeper
+                swap.terminationHandler = { swap in DispatchQueue.main.async { self.newer?.swap = swap.terminationStatus == 0 ? .ready : .failed } }
+                if (try? swap.run()) == nil { newer?.swap = .failed }
+            }
+        }.resume()
+    }
+
+    @objc private func pickUpdate() {
+        switch newer?.swap {
+        case nil: checkUpdates(manual: true)
+        case .failed: NSWorkspace.shared.open(newer!.page)
+        case .ready:
+            newer = nil
+            update()
+        case .running: break
+        }
+    }
+
+    private func tell(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        if window.isVisible { alert.beginSheetModal(for: window) } else { alert.runModal() }
     }
 
     private func probeKey() {
@@ -693,7 +757,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         guard let probe, let line = try? String(contentsOfFile: probe + "/run", encoding: .utf8) else { return }
         try? FileManager.default.removeItem(atPath: probe + "/run")
         let names = line.trimmingCharacters(in: .newlines).components(separatedBy: "\t")
-        guard let menu = names.dropLast().reduce(NSApp.mainMenu, { menu, name in menu?.items.first { $0.submenu?.title == name }?.submenu }), let index = menu.items.firstIndex(where: { $0.title == names.last }) else { return }
+        guard let menu = names.dropLast().reduce(NSApp.mainMenu, { menu, name in menu?.items.first { $0.submenu?.title == name }?.submenu }) else { return }
+        menu.update()
+        try? menu.items.map { $0.title + ($0.isEnabled ? "" : " (off)") }.joined(separator: "\n").write(toFile: probe + "/menu", atomically: true, encoding: .utf8)
+        guard let index = menu.items.firstIndex(where: { $0.title == names.last && $0.isEnabled }) else { return }
         menu.performActionForItem(at: index)
     }
 
@@ -913,7 +980,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                           lastTab: lastTab.mapValues(\.name), zoomed: zoomed, recent: recent, handover: handover,
                           fullScreen: window.styleMask.contains(.fullScreen), scrolled: surfaces.reduce(into: Self.saved?.scrolled ?? [:]) { $0[$1.key] = $1.value.scrolled }.filter { $0.value > 0 },
                           boot: Self.boot, kept: tabs.map { Tab(name: $0.name, group: $0.group, cwd: $0.folder, labels: $0.labels) },
-                          resume: tabs.reduce(into: [:]) { ids, tab in if tab.claude != nil, let path = tab.transcript { ids[tab.name] = ((path as NSString).lastPathComponent as NSString).deletingPathExtension } }, sidebarWidth: sidebarWidth)
+                          resume: tabs.reduce(into: [:]) { ids, tab in if tab.claude != nil { ids[tab.name] = tab.session } }, sidebarWidth: sidebarWidth)
         try? FileManager.default.createDirectory(atPath: (Self.stateFile as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try? JSONEncoder().encode(state).write(to: URL(fileURLWithPath: Self.stateFile), options: .atomic)
     }
@@ -1049,7 +1116,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             let tip = (view as? NSButton).flatMap { button in button.action.map(actions.contains) == true ? button.toolTip : nil }
             return (tip.map { [(String($0[$0.lastIndex(of: "(")!...].dropFirst().dropLast()), view)] } ?? []) + view.subviews.flatMap(buttons)
         }
-        let rows = sidebar.views.enumerated().compactMap { index, row in Self.digitKey(index, of: groups.count).map { ("⌘" + $0, row, true) } }
+        let rows = groups.enumerated().compactMap { index, group in Self.digitKey(index, of: groups.count).flatMap { key in groupRows[group].map { ("⌘" + key, $0 as NSView, true) } } }
         let tabKeys = paneRows.enumerated().compactMap { index, row in Self.digitKey(index, of: paneRows.count).map { ("⌃" + $0, row as NSView, false) } }
         let targets = hintModifier == "⌃" ? tabKeys : buttons(root).map { ($0, $1, false) } + rows
         let topDown = targets.filter { !$0.1.isHiddenOrHasHiddenAncestor && !$0.1.visibleRect.isEmpty }.map { key, view, corner in
@@ -1135,6 +1202,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let main = NSMenu()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Secure Keyboard Entry", action: #selector(toggleSecure), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Bypass Permissions in New Claude Tabs", action: #selector(toggleBypass), keyEquivalent: "")
         appMenu.addItem(withTitle: "Simple Spinner", action: #selector(pickSpinner), keyEquivalent: "").representedObject = "simple"
         if Spark.morph != nil { appMenu.addItem(withTitle: "Sparkle Spinner", action: #selector(pickSpinner), keyEquivalent: "").representedObject = "sparkle" }
         let sounds = NSMenu(title: "Notification Sound")
@@ -1144,6 +1212,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             sounds.addItem(withTitle: (file as NSString).deletingPathExtension, action: #selector(pickSound), keyEquivalent: "").representedObject = (file as NSString).deletingPathExtension
         }
         appMenu.addItem(withTitle: "Notification Sound", action: nil, keyEquivalent: "").submenu = sounds
+        if Self.released { appMenu.addItem(withTitle: "Check for Updates", action: #selector(pickUpdate), keyEquivalent: "") }
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit ClaudeTTY", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let edit = NSMenu(title: "Edit")
@@ -1180,7 +1249,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen), keyEquivalent: "f").keyEquivalentModifierMask = [.control, .command]
         let file = NSMenu(title: "File")
-        for (title, action, key, modifiers) in [("New Terminal Tab", "new_tab", "t", [.command]), ("New Claude Tab", "claude", "t", [.command, .option]), ("New Group", "new_window", "n", [.command]), ("", "", "", []),
+        for (title, action, key, modifiers) in [("New Terminal Tab", "new_tab", "t", [.command]), ("New Claude Tab", "claude", "t", [.command, .option]), ("Reopen Closed Tab", "reopen", "T", [.command]), ("New Group", "new_window", "n", [.command]), ("", "", "", []),
                                                 ("Split Right", "new_split:right", "d", [.command]), ("Split Down", "new_split:down", "D", [.command]), ("Zoom Pane", "toggle_split_zoom", "\r", [.command, .shift]), ("", "", "", []),
                                                 ("Close Tab", "close_surface", "w", [.command]), ("Close Group", "close_window", "W", [.command])] as [(String, String, String, NSEvent.ModifierFlags)] {
             guard !title.isEmpty else {
@@ -1399,6 +1468,16 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             item.state = pick.allSatisfy { Self.look[$0] == $1 } ? .on : .off
             if pick["background-blur"] != nil { return Self.look["background-opacity"] != "1" }
         }
+        if item.action == #selector(toggleBypass) { item.state = UserDefaults.standard.bool(forKey: Self.askKey) ? .off : .on }
+        if item.action == #selector(pickUpdate) {
+            item.title = switch newer?.swap {
+            case nil: "Check for Updates"
+            case .running: "Updating to \(newer!.version)…"
+            case .failed: "Update to \(newer!.version)…"
+            case .ready: "Restart to Update"
+            }
+            return newer?.swap != .running
+        }
         if item.action == #selector(toggleContext) { item.state = UserDefaults.standard.bool(forKey: Self.contextKey) ? .off : .on }
         if item.menu?.supermenu === NSApp.mainMenu, unseen && !groups || asking && (groups || item.action == #selector(fileAction) || item.action == #selector(goToTab)) { return false }
         if item.action == #selector(nextWaiting) { return longestWaiting != nil }
@@ -1459,7 +1538,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func makeSurface(_ tab: Tab) -> SurfaceView {
         let labels = (["group=" + tab.group] + tab.labels.map { $0.key + "=" + $0.value }).joined(separator: " ")
         let command = (["env", "ZMX_NO_DETACH_KEY=1", Self.executable, "--attach", "--labels", labels, tab.name] + (commands[tab.name].map { $0.isEmpty ? [] : Self.attached + $0 } ?? []))
-            .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
+            .map(Self.quoted).joined(separator: " ")
         let view = SurfaceView(app: app!, command: command, cwd: tab.cwd)
         surfaces[tab.name] = view
         if let rows = Self.saved?.scrolled?[tab.name] { view.restore(rows) }
@@ -1483,12 +1562,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let pane = pane ?? self.pane(of: selected)
         let taken = Set(Self.list().compactMap { $0["name"] } + tabs.map(\.name))
         let name = (2...).lazy.map { selected.group + "-\($0)" }.first { !taken.contains($0) }!
-        commands[name] = claude ? Self.claude() : nil
+        commands[name] = claude ? Self.claude(UserDefaults.standard.bool(forKey: Self.askKey) ? "" : "--dangerously-skip-permissions") : nil
         select(insertTab(name, in: pane, beside: selected, cwd: selected.folder))
     }
 
     private static let attached = ["sh", "-c", "i=0; until [ -n \"$(\"$0\" print-env \"$ZMX_SESSION\")\" ] || [ $i -ge 100 ]; do sleep 0.05; i=$((i+1)); done; exec \"$@\"", zmx]
-    private static func claude(_ args: String = "") -> [String] { ["zsh", "-lic", "exec env BUN_OPTIONS=--smol claude --dangerously-skip-permissions " + args] }
+    private static func claude(_ args: String) -> [String] { ["zsh", "-lic", "exec env BUN_OPTIONS=--smol claude " + args] }
+    private static func quoted(_ word: String) -> String { "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     private static let boot: Int = {
         var time = timeval(), size = MemoryLayout<timeval>.size
         sysctlbyname("kern.boottime", &time, &size, nil, 0)
@@ -1518,7 +1598,9 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     @objc private func fileAction(_ item: NSMenuItem) {
-        guard let action = item.representedObject as? String, let surface = selected.flatMap({ surfaces[$0.name]?.surface }) else { return }
+        guard let action = item.representedObject as? String else { return }
+        if action == "reopen" { return reopenTab() }
+        guard let surface = selected.flatMap({ surfaces[$0.name]?.surface }) else { return }
         if action == "claude" { return newTab(claude: true) }
         _ = ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
     }
@@ -1568,6 +1650,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         paint()
         snap()
     }
+
+    @objc private func toggleBypass() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.askKey), forKey: Self.askKey) }
 
     @objc private func toggleContext() {
         UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.contextKey), forKey: Self.contextKey)
@@ -1778,6 +1862,12 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private var groups: [String] {
+        let ranked = rankedGroups.map { ($0, folder($0)) }
+        let folders = ranked.compactMap(\.1).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        return ranked.filter { $0.1 == nil }.map(\.0) + folders.flatMap { name in ranked.filter { $0.1 == name }.map(\.0) }
+    }
+
+    private var rankedGroups: [String] {
         let firsts = tabs.reduce(into: [Tab]()) { found, tab in if !found.contains(where: { $0.group == tab.group }) { found.append(tab) } }
         var states: [String: Int] = [:]
         if UserDefaults.standard.bool(forKey: Self.sortKey) {
@@ -1787,9 +1877,21 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             .sorted { ($0.0, $0.1, $0.2) < ($1.0, $1.1, $1.2) }.map(\.3)
     }
 
-    private func peers(_ group: String) -> [String] {
+    private func peers(_ group: String, folder sharing: Bool = true) -> [String] {
         let pinned = { (group: String) in self.tabs.first { $0.group == group }?.labels["pinned"] != nil }
-        return groups.filter { pinned($0) == pinned(group) }
+        return groups.filter { pinned($0) == pinned(group) && (!sharing || folder($0) == folder(group)) }
+    }
+
+    private func folder(_ group: String) -> String? { tabs.first { $0.group == group }?.labels["folder"] }
+
+    private func shown(_ group: String) -> Bool {
+        guard let folder = folder(group), collapsed.contains(folder) else { return true }
+        return group == selected?.group || tabs.contains { $0.group == group && $0.claude == "waiting" }
+    }
+
+    private var collapsed: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? []) }
+        set { UserDefaults.standard.set(newValue.sorted(), forKey: Self.collapsedKey) }
     }
 
     private func rebuild() {
@@ -1809,7 +1911,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         activities = [:]
         tabSparks = [:]
         meters = [:]
-        sidebar.setViews(groups.map { group in
+        groupRows = [:]
+        folderRows = [:]
+        let closed = collapsed
+        sidebar.setViews(groups.flatMap { group -> [NSView] in
+            let folder = folder(group)
+            let head = folder.flatMap { name in groups.first { self.folder($0) == name } == group ? folderRow(name, open: !closed.contains(name)) : nil }
+            guard shown(group) else { return [head].compactMap { $0 } }
             let groupTabs = tabs.filter { $0.group == group }
             let pinned = groupTabs[0].labels["pinned"] != nil
             let sparks = activity(groupTabs).map { activity in
@@ -1824,11 +1932,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
             row.contextMenu = { [unowned self] in groupMenu(group, pinned: pinned) }
             row.rename = { [unowned self] in rename(group) }
-            row.lane = pinned ? "pinned" : "groups"
+            row.lane = folder.flatMap(closed.contains) == true ? nil : (pinned ? "pinned" : "groups") + (folder.map { " in " + $0 } ?? "")
             row.dropped = { [unowned self] to in reorder(group, to: to) }
-            return row
+            groupRows[group] = row
+            return [head, row].compactMap { $0 }
         }, in: .top)
         for row in sidebar.views { row.widthAnchor.constraint(equalTo: sidebar.widthAnchor).isActive = true }
+        for head in folderRows.values { sidebar.views.firstIndex(of: head).map { $0 > 0 ? sidebar.setCustomSpacing(10, after: sidebar.views[$0 - 1]) : () } }
         let folderIcon = NSWorkspace.shared.icon(forFile: selected.folder)
         window.title = title(selected.group)
         let named = named(selected.group) || tabs.count(where: { $0.group == selected.group }) > 1
@@ -1975,7 +2085,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         animate()
     }
 
-    private var front: [String] { tabs.map { ($0.claude == nil ? "" : "✻ ") + $0.folder } + groups }
+    private var front: [String] { tabs.map { ($0.claude == nil ? "" : "✻ ") + $0.folder } + groups + groups.filter(shown) }
 
     private func redraw(_ group: String) {
         activity(tabs.filter { $0.group == group }).map { activities[group]?.show($0) }
@@ -2195,6 +2305,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let rename = menu.addItem(withTitle: "Rename Group", action: #selector(renameGroup), keyEquivalent: "R")
         rename.target = self
         rename.representedObject = group
+        let inFolder = folder(group), folders = groups.compactMap(folder).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        let folderMenu = NSMenu()
+        for (title, target) in folders.filter { $0 != inFolder }.map({ ($0, Optional($0)) }) + [("New Folder", nil)] + (inFolder == nil ? [] : [("Out of \(inFolder!)", Optional(""))]) {
+            let item = folderMenu.addItem(withTitle: title, action: #selector(moveToFolder), keyEquivalent: "")
+            item.target = self
+            item.representedObject = (group, target)
+        }
+        menu.addItem(withTitle: "Move to Folder", action: nil, keyEquivalent: "").submenu = folderMenu
         menu.addItem(.separator())
         let current = tabs.first { $0.group == group }?.labels["color"]
         let circles = NSStackView(views: ([("none", nil)] + colors.map { ($0.name, Optional($0.color)) }).enumerated().map { index, choice in
@@ -2233,6 +2351,60 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         return menu
     }
 
+    private func folderRow(_ name: String, open: Bool) -> Row {
+        let row = Row(name, icon: NSImage(systemSymbolName: open ? "chevron.down" : "chevron.right", accessibilityDescription: open ? "Close folder" : "Open folder"), head: true, selected: false, fill: .clear) { [unowned self] in
+            if open { collapsed.insert(name) } else { collapsed.remove(name) }
+            rebuild()
+        }
+        row.contextMenu = { [unowned self] in
+            let menu = NSMenu()
+            for (title, action) in [("Rename Folder", #selector(renameFolder)), ("Remove Folder", #selector(removeFolder))] {
+                let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+                item.target = self
+                item.representedObject = name
+            }
+            return menu
+        }
+        row.rename = { [unowned self] in rename(folder: name) }
+        folderRows[name] = row
+        return row
+    }
+
+    @objc private func moveToFolder(_ item: NSMenuItem) {
+        let (group, target) = item.representedObject as! (String, String?)
+        let name = target ?? Self.unused("Folder", Set(tabs.compactMap { $0.labels["folder"] }))
+        label(group, "folder", name)
+        rebuild()
+        if target == nil { rename(folder: name) }
+    }
+
+    @objc private func renameFolder(_ item: NSMenuItem) { rename(folder: item.representedObject as! String) }
+
+    @objc private func removeFolder(_ item: NSMenuItem) {
+        let name = item.representedObject as! String
+        for group in groups where folder(group) == name { label(group, "folder", "") }
+        collapsed.remove(name)
+        rebuild()
+    }
+
+    private func rename(folder name: String) {
+        guard let row = folderRows[name] else { return }
+        let taken = Set(tabs.compactMap { $0.labels["folder"] }).subtracting([name])
+        renaming = true
+        row.edit({ text in
+            let typed = Self.oneWord(text)
+            return typed.isEmpty ? "A folder needs a name." : taken.contains(typed) ? "Another folder is named \(typed)." : nil
+        }) { [unowned self] text in
+            renaming = false
+            if let typed = text.map(Self.oneWord), typed != name {
+                for group in groups where folder(group) == name { label(group, "folder", typed) }
+                if collapsed.remove(name) != nil { collapsed.insert(typed) }
+            }
+            rebuild()
+            window.makeFirstResponder(selected.flatMap { surfaces[$0.name] })
+        }
+    }
+
     @objc private func showInFinder(_ item: NSMenuItem) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: tabs.first { $0.group == item.representedObject as! String }!.folder)])
     }
@@ -2249,8 +2421,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private func reorder(_ group: String, to: Int) {
-        var order = peers(group).filter { $0 != group }
-        order.insert(group, at: to)
+        var lane = peers(group).filter { $0 != group }
+        lane.insert(group, at: to)
+        var next = lane.makeIterator()
+        let order = peers(group, folder: false).map { folder($0) == folder(group) ? next.next()! : $0 }
         for (index, peer) in order.enumerated() where tabs.first(where: { $0.group == peer })?.labels["order"] != String(index) { label(peer, "order", String(index)) }
         rebuild()
     }
@@ -2343,14 +2517,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             return true
         }
         guard under(scroll) else { return false }
-        if let group = zip(groups, sidebar.arrangedSubviews).first(where: { under($0.1) })?.0 { return group != tab.group && regroup(name, to: group) }
+        if let group = groupRows.first(where: { under($0.value) })?.key { return group != tab.group && regroup(name, to: group) }
         guard tabs.contains(where: { $0.group == tab.group && $0 != tab }) else { return false }
         return regroup(name, to: Self.unused(name, takenNames().subtracting([name]).union(groups)))
     }
 
     private func regroup(_ name: String, to group: String) -> Bool {
         let tab = tabs.first { $0.name == name }!, source = tab.group, target = tabs.first { $0.group == group }
-        var wanted = (target?.labels ?? ["named": "0"]).filter { ["color", "pinned", "order", "split", "named"].contains($0.key) }
+        var wanted = (target?.labels ?? ["named": "0"]).filter { ["color", "pinned", "order", "split", "named", "folder"].contains($0.key) }
         wanted["pane"] = target.map { pane(of: tabs.first { $0 == lastTab[group] } ?? $0) }
         wanted["title"] = tab.labels["title"]
         guard label(source, "group", group, tab: name) else { NSSound.beep(); return false }
@@ -2427,7 +2601,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private func rename(_ group: String) {
-        guard let row = zip(groups, sidebar.views).first(where: { $0.0 == group })?.1 as? Row else { return }
+        guard let row = groupRows[group] else { return }
         let shown = title(group)
         renaming = true
         row.edit({ [unowned self] text in
@@ -2462,6 +2636,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func closing(_ names: [String], title: String = "Close tab?", ask: Bool = false) {
         let sessions = Self.list().filter { names.contains($0["name"] ?? "") && $0["pid"] != nil }
         let end = { [unowned self] in
+            closedTabs = Array((closedTabs + sessions.compactMap(closedTab)).suffix(10))
             for session in sessions { _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["kill", session["name"]!]) }
             names.sorted { _, last in last == selected?.name }.forEach(closed)
         }
@@ -2495,21 +2670,83 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         closing(groupTabs.map(\.name), title: (pinned ? "Close pinned group \u{201C}" : "Close group \u{201C}") + title(group) + "\u{201D}?", ask: pinned)
     }
 
+    private func closedTab(_ session: [String: String]) -> (tab: Tab, index: Int, command: [String]?, history: Data?)? {
+        guard let name = session["name"], let index = tabs.firstIndex(where: { $0.name == name }) else { return nil }
+        var tab = tabs[index]
+        tab.pid = session["pid"].flatMap(Int32.init)
+        let kept = Tab(name: name, group: tab.group, cwd: tab.folder, labels: tab.labels)
+        if tab.claude != nil, let session = tab.session, let front = tab.pid.flatMap(foreground) { return (kept, index, Self.claude(Self.flags(Self.arguments(front)) + " --resume " + session), nil) }
+        if tab.labels["replay"] == nil, let command = commands[name] { return (kept, index, command, nil) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: zmx)
+        process.arguments = ["history", name, "--vt"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        guard let done = Self.launch(process) else { return (kept, index, nil, nil) }
+        let history = pipe.fileHandleForReading.readDataToEndOfFile()
+        done.wait()
+        return (kept, index, nil, history.lastIndex(of: 10).map { history.prefix(through: $0) })
+    }
+
+    private static func flags(_ argv: [String]) -> String {
+        let switches: Set = ["--dangerously-skip-permissions", "--verbose", "--ide", "--strict-mcp-config", "--chrome", "--fork-session"]
+        var kept: [String] = [], index = 1
+        while index < argv.count {
+            let word = argv[index]
+            index += 1
+            if ["--resume", "-r", "--session-id"].contains(word) {
+                if index < argv.count, !argv[index].hasPrefix("-") { index += 1 }
+                continue
+            }
+            let value = kept.last.map { $0.hasPrefix("-") && !$0.contains("=") && !switches.contains($0) } ?? false
+            guard word.hasPrefix("-") ? !["--continue", "-c"].contains(word) && !word.hasPrefix("--resume=") && !word.hasPrefix("--session-id=") : value else { continue }
+            kept.append(word)
+        }
+        return kept.map(quoted).joined(separator: " ")
+    }
+
+    private func reopenTab() {
+        guard let (old, index, command, history) = closedTabs.popLast() else { return NSSound.beep() }
+        let taken = Set(Self.list().compactMap { $0["name"] } + tabs.map(\.name))
+        let name = taken.contains(old.name) ? Self.unused(old.group, taken) : old.name
+        var tab = Tab(name: name, group: old.group, cwd: old.cwd, labels: old.labels)
+        if let peer = tabs.first(where: { $0.group == old.group }) {
+            let layout = layout(old.group)
+            for key in ["color", "pinned", "order", "split", "named"] { tab.labels[key] = peer.labels[key] }
+            if !layout.panes.contains(old.labels["pane"] ?? "") { tab.labels["pane"] = pane(of: peer, in: layout) }
+        } else {
+            tab.labels["split"] = nil
+            tab.labels["pane"] = nil
+        }
+        tab.labels["replay"] = history.map { _ in "1" }
+        commands[name] = history.map { history in
+            let path = NSTemporaryDirectory() + "claudetty-" + UUID().uuidString
+            FileManager.default.createFile(atPath: path, contents: history)
+            return ["sh", "-c", "cat \"$0\"; rm -f \"$0\"; exec \"$SHELL\" -l", path]
+        } ?? command
+        tabs.insert(tab, at: min(index, tabs.count))
+        for (rank, peer) in tabs.filter({ $0.group == tab.group }).enumerated() where peer.labels["rank"] != String(rank) {
+            if peer == tab { tabs[tabs.firstIndex(of: tab)!].labels["rank"] = String(rank) } else { label(tab.group, "rank", String(rank), tab: peer.name) }
+        }
+        select(tab)
+    }
+
     private static func jobs(_ session: [String: String], _ tab: Tab?) -> [Job] {
         guard let shell = session["pid"].flatMap(Int32.init), let front = foreground(shell), let own = info(shell)?.pbi_pgid else { return [] }
         let claude = isClaude(shell)
         var found: [proc_bsdinfo] = []
-        var queue = session["cmd"] == nil ? children(shell) : [shell]
+        let command = session["cmd"] != nil && session["replay"] == nil
+        var queue = command ? [shell] : children(shell)
         while let pid = queue.popLast() {
             guard !(claude && pid == front), let process = info(pid) else { continue }
-            if process.pbi_pgid != own || session["cmd"] != nil { found.append(process) }
+            if process.pbi_pgid != own || command { found.append(process) }
             queue += children(pid)
         }
         let leaders = Dictionary(grouping: found, by: \.pbi_pgid).values.map { group in group.min { ($0.pbi_pid != $0.pbi_pgid ? 1 : 0, $0.pbi_start_tvsec) < ($1.pbi_pid != $1.pbi_pgid ? 1 : 0, $1.pbi_start_tvsec) }! }
         let since = { (seconds: UInt64) in Date(timeIntervalSince1970: Double(seconds)) }
         var jobs = leaders.sorted { ($0.pbi_pgid != UInt32(front) ? 1 : 0, $0.pbi_start_tvsec) < ($1.pbi_pgid != UInt32(front) ? 1 : 0, $1.pbi_start_tvsec) }.map { process in
             let words = arguments(Int32(process.pbi_pid), launcher: process.pbi_ppid == UInt32(shell))
-            return Job(name: words.first.map { ($0 as NSString).lastPathComponent } ?? "", detail: words.dropFirst().joined(separator: " "), since: since(process.pbi_start_tvsec))
+            return Job(name: words.first.map { ($0 as NSString).lastPathComponent } ?? withUnsafeBytes(of: process.pbi_comm) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }, detail: words.dropFirst().joined(separator: " "), since: since(process.pbi_start_tvsec))
         }
         if claude, let tab {
             jobs.insert(contentsOf: [Job(name: "Claude", detail: tab.claude?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "", since: since(info(front)?.pbi_start_tvsec ?? 0))] + tab.tasks.map { task in
@@ -2563,7 +2800,12 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
 
     private static func info(_ pid: Int32) -> proc_bsdinfo? {
         var info = proc_bsdinfo()
-        return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 ? info : nil
+        if proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 { return info }
+        var process = kinfo_proc(), size = MemoryLayout<kinfo_proc>.size, mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &process, &size, nil, 0) == 0, size > 0 else { return nil }
+        (info.pbi_pid, info.pbi_ppid, info.pbi_pgid, info.pbi_start_tvsec) = (UInt32(pid), UInt32(process.kp_eproc.e_ppid), UInt32(process.kp_eproc.e_pgid), UInt64(process.kp_proc.p_starttime.tv_sec))
+        info.pbi_comm = withUnsafeBytes(of: process.kp_proc.p_comm) { $0.load(as: type(of: info.pbi_comm)) }
+        return info
     }
 
     private static func children(_ pid: Int32) -> [Int32] {
@@ -2577,12 +2819,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private static func arguments(_ pid: Int32, launcher: Bool = false) -> [String] {
-        var mib = [CTL_KERN, KERN_PROCARGS2, pid], size = 0
-        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0 else { return [] }
-        var buffer = [UInt8](repeating: 0, count: size)
-        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > 4 else { return [] }
-        let count = buffer.withUnsafeBytes { Int($0.load(as: Int32.self)) }
-        let strings = buffer[4..<size].split(separator: 0).dropFirst().map { String(decoding: $0, as: UTF8.self) }
+        guard let (count, all) = started(pid) else { return [] }
+        let strings = all.dropFirst()
         var words = Array(strings.prefix(count))
         if launcher, !words.isEmpty, let ran = strings.dropFirst(count).first(where: { $0.hasPrefix("_=") }) { words[0] = String(ran.dropFirst(2)) }
         return words
@@ -2615,7 +2853,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private static func sessions() -> [Tab] {
         let found = list().compactMap { fields -> (Int, Tab)? in
             guard let name = fields["name"], let group = fields["group"] else { return nil }
-            return (Int(fields["created"] ?? "") ?? 0, Tab(name: name, group: group, cwd: URL(string: fields["cwd"] ?? "")?.path ?? NSHomeDirectory(), labels: fields.filter { ["color", "pinned", "order", "split", "pane", "title", "rank", "notify", "named"].contains($0.key) }, pid: fields["pid"].flatMap(Int32.init), topic: try? String(contentsOfFile: statusDir + "/" + name + ".topic", encoding: .utf8)))
+            return (Int(fields["created"] ?? "") ?? 0, Tab(name: name, group: group, cwd: URL(string: fields["cwd"] ?? "")?.path ?? NSHomeDirectory(), labels: fields.filter { ["color", "pinned", "order", "split", "pane", "title", "rank", "notify", "named", "replay"].contains($0.key) }, pid: fields["pid"].flatMap(Int32.init), topic: try? String(contentsOfFile: statusDir + "/" + name + ".topic", encoding: .utf8)))
         }.sorted { $0.0 < $1.0 }.map(\.1)
         let first = Dictionary(found.enumerated().map { ($1.group, $0) }, uniquingKeysWith: { first, _ in first })
         return found.map { (first[$0.group]!, Int($0.labels["rank"] ?? "") ?? .max, $0) }.sorted { ($0.0, $0.1) < ($1.0, $1.1) }.map(\.2)
@@ -2665,7 +2903,9 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             open(String(decoding: UnsafeRawBufferPointer(start: action.action.open_url.url, count: Int(action.action.open_url.len)), as: UTF8.self), from: view)
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
             let note = action.action.desktop_notification
-            let text = [note.title, note.body].compactMap { $0.map { String(cString: $0) } }.filter { !$0.isEmpty }.joined(separator: ": ")
+            let parts = [note.title, note.body].compactMap { $0.map { String(cString: $0) } }.filter { !$0.isEmpty }
+            guard parts.first != "Claude Code" else { return true }
+            let text = parts.joined(separator: ": ")
             guard let name = tabs.first(where: { surfaces[$0.name] === view })?.name, !text.isEmpty else { return false }
             try? text.write(toFile: statusDir + "/" + name + ".notice", atomically: true, encoding: .utf8)
         case GHOSTTY_ACTION_MOUSE_SHAPE:
@@ -3417,7 +3657,7 @@ final class Row: NSView, NSTextFieldDelegate {
         titleLabel.convert(NSPoint(x: 0, y: titleLabel.isFlipped ? titleLabel.firstBaselineOffsetFromTop : titleLabel.bounds.height - titleLabel.firstBaselineOffsetFromTop), to: nil).y
     }
 
-    init(_ title: String, icon: NSImage? = nil, spark: Spark? = nil, meter: NSTextField? = nil, activity: ActivityView? = nil, detail: String? = nil, bar: NSColor? = nil, selected: Bool, fill: NSColor, close: (() -> Void)? = nil, action: @escaping () -> Void) {
+    init(_ title: String, icon: NSImage? = nil, spark: Spark? = nil, meter: NSTextField? = nil, activity: ActivityView? = nil, detail: String? = nil, bar: NSColor? = nil, head: Bool = false, selected: Bool, fill: NSColor, close: (() -> Void)? = nil, action: @escaping () -> Void) {
         self.action = action
         self.close = close
         titleLabel = NSTextField(labelWithString: title)
@@ -3430,7 +3670,7 @@ final class Row: NSView, NSTextFieldDelegate {
         wantsLayer = true
         layer?.cornerRadius = detail == nil ? 5 : 8
         layer?.backgroundColor = selected ? fill.cgColor : nil
-        titleLabel.font = detail == nil ? Self.tabFont : .systemFont(ofSize: 12, weight: .bold)
+        titleLabel.font = head ? .systemFont(ofSize: 11, weight: .semibold) : detail == nil ? Self.tabFont : .systemFont(ofSize: 12, weight: .bold)
         titleLabel.textColor = selected || detail != nil ? .labelColor : .secondaryLabelColor
         titleLabel.lineBreakMode = .byTruncatingTail
         if detail != nil { titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
@@ -3442,9 +3682,10 @@ final class Row: NSView, NSTextFieldDelegate {
         titleLine.spacing = 5
         if let icon {
             let iconView = NSImageView(image: icon)
-            iconView.symbolConfiguration = .init(pointSize: 11, weight: .regular)
+            iconView.symbolConfiguration = .init(pointSize: head ? 8 : 11, weight: head ? .bold : .regular)
             iconView.contentTintColor = selected && detail == nil ? .labelColor : .secondaryLabelColor
-            titleLine.insertView(iconView, at: 0, in: .leading)
+            head ? titleLine.addView(iconView, in: .leading) : titleLine.insertView(iconView, at: 0, in: .leading)
+            if head { titleLine.spacing = 4 }
         }
         if let spark { titleLine.insertView(spark, at: 0, in: .leading) }
         meter?.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
@@ -3481,7 +3722,7 @@ final class Row: NSView, NSTextFieldDelegate {
         } else if activity != nil {
             stack.setCustomSpacing(3, after: titleLine)
         }
-        stack.edgeInsets = detail == nil ? NSEdgeInsets(top: 3, left: 8, bottom: 3, right: 8) : NSEdgeInsets(top: 7, left: 12, bottom: 7, right: 12)
+        stack.edgeInsets = detail == nil ? NSEdgeInsets(top: 3, left: head ? 12 : 8, bottom: 3, right: 8) : NSEdgeInsets(top: 7, left: 12, bottom: 7, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -3950,7 +4191,7 @@ final class Spark: NSButton {
     let lines = ["at \(Int(anchor.x)) \(Int(anchor.y))"] + menu.items.map { item in
         if item.isSeparatorItem { return "-" }
         if let view = item.view, !view.subviews.isEmpty { return view.subviews.map { "button " + ($0.accessibilityLabel() ?? "") }.joined(separator: "\n") }
-        return item.title + (item.keyEquivalent.isEmpty ? "" : " ⌘" + item.keyEquivalent) + (item.state == .on ? " ✓" : "") + (item.isEnabled ? "" : " (off)") + (item.subtitle.map { " [\($0)]" } ?? "")
+        return item.title + (item.keyEquivalent.isEmpty ? "" : " ⌘" + item.keyEquivalent) + (item.state == .on ? " ✓" : "") + (item.isEnabled ? "" : " (off)") + (item.subtitle.map { " [\($0)]" } ?? "") + (item.submenu.map { " ▸ " + $0.items.map(\.title).joined(separator: ", ") } ?? "")
     }
     try? lines.joined(separator: "\n").write(toFile: probe + "/menu", atomically: true, encoding: .utf8)
     let views = menu.items.compactMap { item in item.view is GroupEntry ? item.view : item.attributedTitle.map { text in
@@ -3982,7 +4223,8 @@ final class Spark: NSButton {
     }
     guard let pick = try? String(contentsOfFile: probe + "/pick", encoding: .utf8).trimmingCharacters(in: .newlines) else { return true }
     try? FileManager.default.removeItem(atPath: probe + "/pick")
-    if let index = menu.items.firstIndex(where: { $0.title == pick && $0.isEnabled }) { menu.performActionForItem(at: index) }
+    let path = pick.components(separatedBy: "\t"), picked = path.dropLast().reduce(Optional(menu)) { menu, title in menu?.items.first { $0.title == title }?.submenu }
+    if let picked, let index = picked.items.firstIndex(where: { $0.title == path.last && $0.isEnabled }) { picked.performActionForItem(at: index) }
     (menu.items.compactMap(\.view).flatMap(\.subviews).first { $0.accessibilityLabel() == pick } as? NSButton)?.performClick(nil)
     return true
 }
