@@ -84,7 +84,8 @@ For the same reason pull requests are turned off on this repo. If you want it to
 - If you right-click a group and pick Sort by State, waiting groups stay at the top in the sidebar.
 - Holding <kbd>⌃</kbd> shows each tab's number.
 - <kbd>⌘</kbd><kbd>⇧</kbd><kbd>T</kbd> reopens the last tab you closed, in the same group and spot. A Claude tab resumes its conversation with the same flags it was started with, and a shell gets its folder and scrollback back.
-- Groups can go in folders (right-click a group, Move to Folder). Clicking a folder collapses it, and that's all a folder does, it's just for sorting.
+- Groups can go in folders (right-click a group, Move to Folder). Clicking a folder collapses it, and that's all a folder does, it's just for sorting. <kbd>⌘</kbd>-click or <kbd>⇧</kbd>-click selects several groups if you want to move a bunch at once.
+- Right-click a tab and pick Schedule Message… to have it typed in at a set time, so you can queue up a message for Claude or a command for later.
 - It updates itself. It checks GitHub at launch and once a day, downloads the new version in the background and waits for you to pick Restart to Update in the ClaudeTTY menu.
 - If you answer a permission prompt from somewhere else, the notification goes away on its own instead of sitting there forever.
 - Shell tabs come back scrolled to where you left them after an update, not dumped at the bottom.
