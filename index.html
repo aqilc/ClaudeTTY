@@ -234,19 +234,23 @@
   .nap.asleep .tab span b { color: var(--ink); }
 
   /* inside: the app and the zmx sessions it attaches to; quit it and they keep going */
-  .stack { display: flex; flex-direction: column; align-items: center; }
+  .stack { display: flex; flex-direction: column; align-items: center; --gap: 10px; }
   .stack .app { display: flex; align-items: center; gap: 12px; padding: 10px 18px 10px 12px; border-radius: 14px; background: color-mix(in srgb, var(--side) 70%, transparent); transition: opacity 300ms ease, filter 300ms ease, transform 300ms cubic-bezier(0.23, 1, 0.32, 1); }
   .stack .app b { display: block; font-size: 16px; }
   .stack .app span { display: block; font-size: 13px; color: var(--muted); }
-  .wires { display: grid; grid-template-columns: repeat(4, 1fr); width: 100%; height: 44px; }
-  .wires i { justify-self: center; width: 2px; background: var(--clawd); opacity: .55; transition: opacity 300ms ease; }
-  .sessions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; width: 100%; }
+  /* a trunk from the app, a bar across, a drop to each session; opacity on the group so the joints don't double up */
+  .wires { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); width: 100%; height: 44px; opacity: .55; transition: opacity 300ms ease; }
+  .wires i, .wires::before, .wires::after { background: var(--clawd); }
+  .wires i { justify-self: center; align-self: end; width: 2px; height: calc(50% - 1px); }
+  .wires::before { content: ''; position: absolute; inset: calc(50% - 1px) calc((100% - 3 * var(--gap)) / 8 - 1px) auto; height: 2px; }
+  .wires::after { content: ''; position: absolute; top: 0; left: calc(50% - 1px); width: 2px; height: calc(50% - 1px); }
+  .sessions { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); width: 100%; }
   .sessions div { display: grid; justify-items: center; gap: 6px; padding: 14px 6px 12px; border-radius: 12px; background: color-mix(in srgb, var(--side) 70%, transparent); }
   .sessions .m { width: 22px; height: 22px; }
   .sessions b { font-size: 14px; }
   .sessions code { font: 11.5px var(--mono); color: var(--muted); }
   .stack.quit .app { opacity: .35; filter: grayscale(1); transform: scale(.96); }
-  .stack.quit .wires i { opacity: 0; }
+  .stack.quit .wires { opacity: 0; }
   .facts p { max-width: none; margin: 0 0 22px; }
   .facts p b { display: block; margin-bottom: 2px; }
   #inside .cards { align-items: start; }
@@ -277,7 +281,7 @@
     .vs > div { display: none; }
     .vs span { grid-column: 1 / -1; margin-top: 10px; font-size: 13px; }
     .vs p { font-size: 14px; }
-    .sessions { gap: 6px; }
+    .stack { --gap: 6px; }
     .sessions div { padding: 12px 4px 10px; }
     pre { margin: 0 0 16px; border-radius: 12px; }
   }
