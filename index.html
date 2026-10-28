@@ -197,9 +197,9 @@
   <div class="clip"><p><b>See what every Claude is doing.</b> Each tab's dots move differently for thinking, writing, reading, searching and running code, or switch to Clawd and he acts it all out. A tab waiting on you turns amber.</p><div class="duo"><div class="morph"><i class="m" data-cycle="think,compose,write,read,search,code,default,blocked"></i><span>Thinking</span></div><div class="pills"><button data-to="think"><i class="m" data-m="think"></i>Thinking</button><button data-to="compose"><i class="m" data-m="compose"></i>Writing</button><button data-to="write"><i class="m" data-m="write"></i>Edit</button><button data-to="read"><i class="m" data-m="read"></i>Read</button><button data-to="search"><i class="m" data-m="search"></i>Search</button><button data-to="code"><i class="m" data-m="code"></i>Bash</button><button data-to="default"><i class="m" data-m="default"></i>Other tools</button><button data-to="blocked"><i class="m" data-m="blocked"></i>Waiting on you</button></div></div></div>
   <div class="player">
     <div class="chapters">
-      <button class="on" data-src="media/survive.gif" data-ms="6550"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every Claude keeps working.</span><i></i></button>
-      <button data-src="media/sidebar.gif" data-ms="6360"><b>Animations and polish.</b><span>Tabs and groups slide aside as you drag, and the sidebar slides like a native Mac one. Satisfying. <kbd>⌘B</kbd> for less satisfaction but some more practicality.</span><i></i></button>
-      <button data-src="media/mod.gif" data-ms="11650"><b>Change it yourself.</b><span>The whole app is about 5,500 lines of Swift in three files. Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
+      <button class="on" data-src="media/survive.gif" data-ms="7600"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every Claude keeps working.</span><i></i></button>
+      <button data-src="media/sidebar.gif" data-ms="9280"><b>Animations and polish.</b><span>Tabs and groups slide aside as you drag, and the sidebar slides like a native Mac one. Satisfying. <kbd>⌘B</kbd> for less satisfaction but some more practicality.</span><i></i></button>
+      <button data-src="media/mod.gif" data-ms="11550"><b>Change it yourself.</b><span>The whole app is about 5,500 lines of Swift in three files. Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
     </div>
     <img src="media/survive.gif" width="900" height="596" alt="The app is killed and reopened with every tab still running">
   </div>
@@ -221,7 +221,8 @@
     <div><b>0.03%</b><span>idle CPU</span></div>
     <div><b>20 MB</b><span>the whole app</span></div>
   </div>
-  <p class="note">Median of 5 launches, one window with one tab. How I measured and the rest of the table is in the <a href="https://github.com/aqilc/ClaudeTTY#comparison-with-others-in-its-space">README</a>.</p>
+  <p>Tabs also sleep like Chrome's after 20 idle minutes, so with 15 tabs open it stays at 140-180 MB on my machine. If a sleeping Claude's cache goes cold its icon turns icy cyan, or you can turn on View > Keep Asleep Tabs Warm.</p>
+  <p class="note">Median of 5 launches, one window with one tab. How I measured and the rest of the table is in the <a href="https://github.com/aqilc/ClaudeTTY#compared-to-cmux-and-others">README</a>.</p>
 </section>
 
 <section id="ct">
