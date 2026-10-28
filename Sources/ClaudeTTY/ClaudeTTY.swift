@@ -36,18 +36,22 @@ struct Tab: Equatable, Codable {
     }
 
     var claude: String? {
-        guard let pid, isClaude(pid) else { return nil }
-        let state = (try? String(contentsOfFile: statusDir + "/" + name, encoding: .utf8)) ?? ""
-        return (state == "working" || state == "waiting") && interrupted ? "idle" : state
+        guard let pid, isClaude(pid) else { return labels["sleep"] != nil || status == "asleep" ? "asleep" : nil }
+        let state = status ?? "", ended = (state == "working" || state == "waiting") && interrupted ? "idle" : state
+        return ended == "idle" && listed.contains { $0[0] == "shell" } ? "background" : ended
     }
+
+    private var status: String? { try? String(contentsOfFile: statusDir + "/" + name, encoding: .utf8) }
 
     private var interrupted: Bool {
         guard let message = transcript.map(lastMessages)?.first, message["type"] as? String == "user", let content = (message["message"] as? [String: Any])?["content"] else { return false }
         return ((content as? String) ?? (content as? [[String: Any]])?.first?["text"] as? String)?.hasPrefix("[Request interrupted by user") == true
     }
 
-    var tasks: [[String]] {
-        guard claude != nil, let text = try? String(contentsOfFile: statusDir + "/" + name + ".agents", encoding: .utf8) else { return [] }
+    var tasks: [[String]] { claude == nil ? [] : listed }
+
+    private var listed: [[String]] {
+        guard let text = try? String(contentsOfFile: statusDir + "/" + name + ".agents", encoding: .utf8) else { return [] }
         return text.split(separator: "\n").map { $0.split(separator: "\t", maxSplits: 3).map(String.init) }.filter { $0.count == 4 }
     }
 
@@ -61,6 +65,7 @@ struct Tab: Equatable, Codable {
     var mark: String? {
         switch claude {
         case "waiting": return "blocked"
+        case "background": return "background"
         case "working":
             guard let action else { return "default" }
             switch action.tool {
@@ -85,6 +90,7 @@ struct Tab: Equatable, Codable {
         return ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].reduce(0) { $0 + (usage[$1] as? Int ?? 0) }
     }
 
+    var reply: [String: Any]? { transcript.map(lastMessages)?.first { (($0["message"] as? [String: Any])?["model"] as? String)?.hasPrefix("claude") == true } }
     var transcript: String? { try? String(contentsOfFile: statusDir + "/" + name + ".transcript", encoding: .utf8) }
     var session: String? { transcript.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension } }
 }
@@ -94,13 +100,19 @@ let stamps = { let format = ISO8601DateFormatter(); format.formatOptions.insert(
 func lastMessages(_ path: String) -> [[String: Any]] {
     guard let file = FileHandle(forReadingAtPath: path) else { return [] }
     defer { try? file.close() }
-    let end = (try? file.seekToEnd()) ?? 0, start = end > 65_536 ? end - 65_536 : 0
+    let end = (try? file.seekToEnd()) ?? 0
     let stamp = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date ?? .distantPast
     if let cached = parsed[path], cached.stamp == stamp, cached.size == end { return cached.messages }
-    try? file.seek(toOffset: start)
-    let lines = (try? file.readToEnd())?.split(separator: UInt8(ascii: "\n")) ?? []
-    let messages = lines.dropFirst(start > 0 ? 1 : 0).reversed().compactMap { line in
-        (try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]).flatMap { ["assistant", "user"].contains($0["type"] as? String) ? $0 : nil }
+    var window: UInt64 = 65_536, messages: [[String: Any]] = []
+    while true {
+        let start = end > window ? end - window : 0
+        try? file.seek(toOffset: start)
+        let lines = (try? file.readToEnd())?.split(separator: UInt8(ascii: "\n")) ?? []
+        messages = lines.dropFirst(start > 0 ? 1 : 0).reversed().compactMap { line in
+            (try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]).flatMap { ["assistant", "user"].contains($0["type"] as? String) ? $0 : nil }
+        }
+        if start == 0 || messages.contains(where: { $0["type"] as? String == "assistant" }) { break }
+        window *= 4
     }
     parsed[path] = (stamp, end, messages)
     return messages
@@ -182,9 +194,14 @@ func foreground(_ pid: Int32) -> Int32? {
 
 func isClaude(_ pid: Int32) -> Bool {
     guard let front = foreground(pid) else { return false }
+    let path = binary(front)
+    return path.contains("/claude/versions/") || path.isEmpty && started(front)?.strings.first?.hasSuffix("/claude") == true
+}
+
+func binary(_ pid: Int32) -> String {
     var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-    proc_pidpath(front, &path, UInt32(path.count))
-    return String(cString: path).contains("/claude/versions/") || path[0] == 0 && started(front)?.strings.first?.hasSuffix("/claude") == true
+    proc_pidpath(pid, &path, UInt32(path.count))
+    return String(cString: path)
 }
 
 func started(_ pid: Int32) -> (count: Int, strings: [String])? {
@@ -212,11 +229,26 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private static let collapsedKey = "collapsed folders " + zmxDir
     private static let buttonsKey = "hide pane buttons " + zmxDir
     private static let askKey = "claude asks permission " + zmxDir
+    private static let wakeKey = "no idle sleep " + zmxDir
+    private static let warmKey = "keep asleep tabs warm " + zmxDir
     private static let contextKey = "hide context size " + zmxDir
+    private static let freeSizeKey = "free size " + zmxDir
     private static let scheduledKey = "scheduled " + zmxDir
+    private static let themeKey = "theme " + zmxDir
+    private var guide: Guide?
+    private var themeWatch: NSKeyValueObservation?
+    static var light: Bool { NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua }
     private static let lookKey = "look " + zmxDir
-    private static let lookDefaults = ["cursor-style": "block", "cursor-style-blink": "", "background-opacity": "1", "background-blur": "0", "window-padding-x": "8", "window-padding-y": "4,8"]
-    private static var look: [String: String] { lookDefaults.merging(UserDefaults.standard.dictionary(forKey: lookKey) as? [String: String] ?? [:]) { $1 } }
+    private static let lookDefaults = ["cursor-style": "block", "cursor-style-blink": "", "background-opacity": "0.8", "background-blur": "15", "window-padding-x": "8", "window-padding-y": "4,8"]
+    private static var look: [String: String] {
+        var look = lookDefaults
+        for (key, value) in UserDefaults.standard.dictionary(forKey: lookKey) as? [String: String] ?? [:] where look[key] != nil { look[key] = value }
+        look["background-blur"] = ["10": "4", "30": "15"][look["background-blur"]!] ?? look["background-blur"]
+        for (key, steps) in ["background-opacity": transparencies, "background-blur": blurs] where !steps.contains(where: { $0.value == look[key] }) { look[key] = lookDefaults[key] }
+        return look
+    }
+    private static let transparencies = [("Off", "1"), ("Low", "0.9"), ("Medium", "0.8"), ("High", "0.65")].map { (title: $0, value: $1) }
+    private static let blurs = [("Off", "0"), ("Low", "4"), ("Medium", "15"), ("High", "60")].map { (title: $0, value: $1) }
     static var padding: CGSize {
         CGSize(width: Double(look["window-padding-x"]!) ?? 8, height: look["window-padding-y"]!.split(separator: ",").compactMap { Double($0) }.reduce(0, +))
     }
@@ -232,8 +264,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var commands: [String: [String]] = [:]
     private var closedTabs: [(tab: Tab, index: Int, command: [String]?, history: Data?)] = []
     private let sidebar = NSStackView()
-    private let tabBar = NSStackView()
+    private let tabBar = TabStrip()
     private let terminal = NSView()
+    private let backing = NSView()
+    private let header = NSView()
     private var side: NSView!
     private var sidebarShown = true
     private var zoomed: [String: String] = [:]
@@ -250,6 +284,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var groupRows: [String: Row] = [:]
     private var folderRows: [String: Row] = [:]
     private var replies: [String: (stamp: Date, reply: (text: String, at: Date)?)] = [:]
+    private var verbs: [String: (at: Date, verb: String?)] = [:]
+    private var tails: [String: Process] = [:]
     private var transcripts: [String: (path: String, watch: DispatchSourceFileSystemObject)] = [:]
     private var fronts: [String] = []
     private var spinner: Timer?
@@ -265,6 +301,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var hintTimer: Timer?
     private var pills: [KeyPill] = []
     private var paneRows: [Row] = []
+    private var tabRows: [String: Row] = [:]
     private var hintModifier = "⌘"
     private static let port = "dev.claudetty.app" + (probe.map { "." + $0 } ?? "") as CFString
     private static var server: CFMessagePort?
@@ -284,6 +321,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         var handover: Handover?
         var fullScreen: Bool?, scrolled: [String: UInt64]?
         var boot: Int?, kept: [Tab]?, resume: [String: String]?, sidebarWidth: CGFloat?
+        var asleep: [String: [String]]?
     }
     private static let stateFile = probe.map { $0 + "/state.json" } ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/ClaudeTTY/state.json").path
     private static let saved = (try? Data(contentsOf: URL(fileURLWithPath: stateFile))).flatMap { try? JSONDecoder().decode(State.self, from: $0) }
@@ -291,7 +329,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var normalFrame = NSRect.zero
     private var menuMarks: [(item: NSMenuItem, mark: String)] = []
     private var menuTimer: Timer?
-    private enum Swap { case running, failed, ready }
+    private enum Swap { case running, failed }
     private var newer: (version: String, page: URL, swap: Swap)?
     private var updateWait: Timer?
     private struct Notice: Equatable { let text: String, at: Date; var bannered: Bool }
@@ -310,12 +348,25 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin", 1)
             case "notify": exit(notice())
             case "list", "events", "wait": exit(states())
+            case "prompt":
+                guard CommandLine.arguments.count == 3, let draft = prompt(CommandLine.arguments[2]) else { exit(failed("prompt <tab>: no Claude prompt box on its screen")) }
+                if !draft.isEmpty { print(draft) }
+                exit(0)
             case "--attach": attach()
             case "--keeper": exit(keeper())
             case "reload": exit(reload())
+            case "help", "-h", "--help":
+                print("""
+                ct <group> [<tab> [command…]]               open a tab, or move a live one to <group>
+                ct split <tab> right|down|left|up <name> [command…]
+                ct list [--json] | events | wait <tab> <state> | focus <tab> | prompt <tab> | notify <text> | reload
+                """)
+                exit(0)
+            case let flag? where flag.hasPrefix("-"): exit(failed("doesn't know \(flag). ct help lists its commands"))
             default: exit(request())
             }
         }
+        guard probe != nil || executable.hasSuffix(".app/Contents/MacOS/ClaudeTTY") else { exit(failed("runs as the app only from a bundle, or as a probe (CLAUDETTY_PROBE=<dir>)")) }
         let listening = listen()
         if let ready { close(ready) }
         unsetenv("CLAUDETTY_READY")
@@ -501,21 +552,38 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         return (try? text.write(toFile: statusDir + "/" + tab + ".notice", atomically: true, encoding: .utf8)) == nil ? failed("notify couldn't write") : 0
     }
 
+    private static func watch(_ path: String, _ handler: @escaping () -> Void) -> DispatchSourceFileSystemObject {
+        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        let watch = DispatchSource.makeFileSystemObjectSource(fileDescriptor: Darwin.open(path, O_EVTONLY), eventMask: .write, queue: .main)
+        watch.setEventHandler(handler: handler)
+        watch.resume()
+        return watch
+    }
+
     private static func states() -> Int32 {
         let args = Array(CommandLine.arguments.dropFirst())
         func state(_ tab: Tab) -> String { tab.claude.map { $0.isEmpty ? "idle" : $0 } ?? "shell" }
+        func tabs() -> [Tab] {
+            let live = sessions(), saved = (try? Data(contentsOf: URL(fileURLWithPath: stateFile))).flatMap { try? JSONDecoder().decode(State.self, from: $0) }
+            return live + (saved?.kept ?? []).filter { $0.labels["sleep"] != nil && !live.contains($0) }
+        }
         if args.first == "list" {
             let keys = ["group", "tab", "title", "state", "folder", "context"]
-            let rows = sessions().map { tab in Dictionary(uniqueKeysWithValues: zip(keys, [tab.group, tab.name, tab.title, state(tab), tab.folder, tab.context.map(String.init) ?? ""])) }
+            let rows = tabs().map { tab in Dictionary(uniqueKeysWithValues: zip(keys, [tab.group, tab.name, tab.title, state(tab), tab.folder, tab.context.map(String.init) ?? ""])) }
             if args.last == "--json" { print(String(decoding: try! JSONSerialization.data(withJSONObject: rows, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)) }
             else { for row in rows { print(keys.map { row[$0]! }.joined(separator: "\t")) } }
             return 0
         }
         let wait = args.first == "wait" ? Array(args.dropFirst()) : []
-        guard args.first == "events" || wait.count == 2 else { return failed("wait <tab> working|waiting|idle|shell") }
+        guard args.first == "events" || wait.count == 2 else { return failed("wait <tab> working|waiting|background|idle|shell") }
         var last: [String: String] = [:]
         func check() {
-            let now = sessions().map { ($0.name, state($0)) }
+            var now = tabs().map { ($0.name, state($0)) }
+            func modified(_ path: String) -> Date { (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date ?? .distantPast }
+            for name in last.keys where !now.contains(where: { $0.0 == name }) {
+                let status = statusDir + "/" + name
+                if (try? String(contentsOfFile: status, encoding: .utf8)) == "asleep", modified(status) > modified(stateFile) { now.append((name, "asleep")) }
+            }
             if let tab = wait.first {
                 guard let held = now.first(where: { $0.0 == tab }) else { exit(failed("wait: no tab \(tab)")) }
                 if held.1 == wait[1] { exit(0) }
@@ -527,13 +595,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             last = Dictionary(now, uniquingKeysWith: { first, _ in first })
         }
         check()
-        let watches = [statusDir, zmxDir].map { path in
-            try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-            let watch = DispatchSource.makeFileSystemObjectSource(fileDescriptor: Darwin.open(path, O_EVTONLY), eventMask: .write, queue: .main)
-            watch.setEventHandler { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: check) }
-            watch.resume()
-            return watch
-        }
+        let watches = [statusDir, zmxDir, (stateFile as NSString).deletingLastPathComponent].map { watch($0) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: check) } }
         withExtendedLifetime(watches) { dispatchMain() }
     }
 
@@ -543,17 +605,51 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let overrides = NSTemporaryDirectory() + "claudetty.conf"
         var look = look
         if look["background-opacity"] != "1" { look["background-opacity"] = "0" }
-        try? (["background = #000000"] + look.sorted { $0.key < $1.key }.map { "\($0) = \($1)" }).joined(separator: "\n").write(toFile: overrides, atomically: true, encoding: .utf8)
+        look["background-blur"] = nil
+        let ground = light ? ["theme = Apple System Colors Light", "background = #ffffff", "foreground = #000000"] : ["background = #000000"]
+        try? (ground + ["window-padding-color = extend"] + look.sorted { $0.key < $1.key }.map { "\($0) = \($1)" }).joined(separator: "\n").write(toFile: overrides, atomically: true, encoding: .utf8)
         ghostty_config_load_file(config, overrides)
         ghostty_config_finalize(config)
         return config
     }
 
     private func paint() {
-        let opacity = Double(Self.look["background-opacity"]!) ?? 1
-        window.backgroundColor = NSColor.black.withAlphaComponent(opacity)
-        window.isOpaque = opacity == 1
-        app.map { ghostty_set_window_background_blur($0, Unmanaged.passUnretained(window).toOpaque()) }
+        window.isOpaque = Self.look["background-opacity"] == "1"
+        window.backgroundColor = window.isOpaque ? Self.light ? .white : .black : .clear
+        defer { edges() }
+        guard !window.isOpaque else { return backing.layer!.sublayers = nil }
+        Self.ground(backing.layer!, light: Self.light)
+    }
+
+    private func edges() {
+        func fill(_ body: Body?) -> NSColor? {
+            guard let edge = body?.subviews.lazy.compactMap({ ($0 as? SurfaceView)?.edge }).first, edge.explicit || window.isOpaque else { return nil }
+            return edge.color
+        }
+        func wear(_ view: NSView, _ color: NSColor?) {
+            view.layer?.backgroundColor = color?.cgColor
+            view.appearance = color.map { NSAppearance(named: $0.redComponent * 0.299 + $0.greenComponent * 0.587 + $0.blueComponent * 0.114 > 0.5 ? .aqua : .darkAqua) } ?? nil
+        }
+        wear(header, panes.values.first { $0.bar == nil }.flatMap { fill($0.body) })
+        for view in [tabBar, titleButtons] { view.appearance = header.appearance }
+        for pane in panes.values { pane.bar.map { wear($0, fill(pane.body)) } }
+    }
+
+    static func ground(_ layer: CALayer, light: Bool) {
+        let opacity = Double(look["background-opacity"]!)!, radius = Int(look["background-blur"]!)!
+        let tint = CALayer()
+        tint.backgroundColor = NSColor(white: light ? 1 : 0, alpha: opacity).cgColor
+        layer.sublayers = [tint]
+        if opacity < 1, radius > 0, let backdrop = (NSClassFromString("CABackdropLayer") as? CALayer.Type)?.init(), let filter = NSClassFromString("CAFilter") as? NSObject.Type {
+            let blur = filter.perform(NSSelectorFromString("filterWithType:"), with: "gaussianBlur").takeUnretainedValue() as! NSObject
+            blur.setValuesForKeys(["inputRadius": radius, "inputNormalizeEdges": true])
+            backdrop.filters = [blur]
+            layer.insertSublayer(backdrop, at: 0)
+        }
+        for sublayer in layer.sublayers! {
+            sublayer.frame = layer.bounds
+            sublayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        }
     }
 
     private static func failed(_ reason: String) -> Int32 {
@@ -566,6 +662,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             try? SMAppService.agent(plistName: "dev.claudetty.keeper.plist").register()
             if bundled { DispatchQueue.global(qos: .utility).async(execute: Self.settle) }
         }
+        theme()
+        lit = Self.light
         let config = Self.config()
         var runtime = ghostty_runtime_config_s(
             userdata: nil,
@@ -587,9 +685,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         ghostty_app_set_focus(app, true)
 
         tabs = Self.sessions()
-        let restored = Self.saved?.boot == Self.boot ? [] : (Self.saved?.kept ?? []).filter { !tabs.contains($0) }
-        for tab in restored { commands[tab.name] = Self.saved?.resume?[tab.name].map { Self.claude("--dangerously-skip-permissions --resume " + $0) } }
+        let restored = (Self.saved?.kept ?? []).filter { !tabs.contains($0) && (Self.saved?.boot != Self.boot || $0.labels["sleep"] != nil) }
+        for tab in restored { commands[tab.name] = Self.saved?.asleep?[tab.name] ?? Self.saved?.resume?[tab.name].map { Self.claude("--dangerously-skip-permissions --resume " + $0) } }
         tabs += restored
+        if !restored.isEmpty, let kept = Self.saved?.kept {
+            let place = Dictionary(kept.enumerated().map { ($1.name, $0) }) { first, _ in first }
+            tabs.sort { place[$0.name, default: .max] < place[$1.name, default: .max] }
+        }
         hidden = predecessor?.hidden ?? false
         if let old = predecessor?.pid {
             let reclaim = { [unowned self] in
@@ -607,6 +709,9 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             (shown, zoomed, recent) = (Set(saved.shown), saved.zoomed, saved.recent)
         }
         readNotices(fresh: false)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        if Self.released, let last = UserDefaults.standard.string(forKey: "version"), version.compare(last, options: .numeric) == .orderedDescending { post("ClaudeTTY", "Updated to \(version).") }
+        UserDefaults.standard.set(version, forKey: "version")
         if probe == nil, Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate = self }
         window = Window(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.titlebarAppearsTransparent = true
@@ -628,22 +733,26 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         if probe != nil { Self.saved?.fullScreen == true ? onscreen() : window.setFrameOrigin(NSPoint(x: 20_000, y: 20_000)) }
         window.layoutIfNeeded()
-        for tab in restored { makeSurface(tab).setVisible(false) }
-        for dir in [statusDir, zmxDir] { try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true) }
-        watches = ([(statusDir, self.statusSoon),((Self.executable as NSString).deletingLastPathComponent, self.update), (zmxDir, { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: self.refresh) })] + (probe.map { [($0, { self.probeKey(); self.probeClick(); self.probeMenu(); self.probeDrop(); self.probeShot(); self.probeActive() })] } ?? [])).map { path, handler in
-            let watch = DispatchSource.makeFileSystemObjectSource(fileDescriptor: Darwin.open(path, O_EVTONLY), eventMask: .write, queue: .main)
-            watch.setEventHandler(handler: handler)
-            watch.resume()
-            return watch
+        for tab in restored {
+            if tab.labels["sleep"] == nil {
+                makeSurface(tab).setVisible(false)
+            } else {
+                warm(tab.name)
+            }
         }
+        watches = ([(statusDir, self.statusSoon),((Self.executable as NSString).deletingLastPathComponent, self.update), (zmxDir, { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: self.refresh) })] + (probe.map { [($0, { self.probeKey(); self.probeClick(); self.probeMenu(); self.probeDrop(); self.probeShot(); self.probeActive(); self.probeTrace() })] } ?? [])).map { Self.watch($0, $1) }
         if Self.released {
             checkUpdates()
             Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { [unowned self] _ in checkUpdates() }.tolerance = 3600
         }
         scheduled.forEach(arm)
-        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [unowned self] _ in if drawing { activities.keys.forEach(redraw) } }.tolerance = 10
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [unowned self] _ in
+            if drawing { activities.keys.forEach(redraw) }
+            resumeUpdatedClaude()
+        }.tolerance = 10
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [unowned self] _ in update() }
         NSApp.mainMenu = menu()
+        themeWatch = NSApp.observe(\.effectiveAppearance) { [unowned self] _, _ in DispatchQueue.main.async { self.relight() } }
         NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [unowned self] in keyHints($0) }
         CFRunLoopAddSource(CFRunLoopGetMain(), CFMessagePortCreateRunLoopSource(nil, Self.server, 0), .commonModes)
     }
@@ -651,6 +760,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func update() {
         let build = Self.build
         guard build != nil, build != running, newer == nil else { return }
+        if let written = (try? FileManager.default.attributesOfItem(atPath: Self.executable))?[.modificationDate] as? Date, written.timeIntervalSinceNow > -1 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [unowned self] in update() }
+            return
+        }
         guard hidden || window.isOnActiveSpace && !window.isMiniaturized else {
             if updateWait == nil { updateWait = .scheduledTimer(withTimeInterval: probe == nil ? 600 : 1, repeats: false) { [unowned self] in
                 $0.invalidate()
@@ -697,7 +810,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                     rm -rf "${2:?}.new" "$2.old"; ditto $T/m/ClaudeTTY.app "$2.new"; mv "$2" "$2.old"; mv "$2.new" "$2" || { mv "$2.old" "$2"; exit 1; }; rm -rf "$2.old"
                     [[ -z $3 ]] || launchctl kickstart -k gui/$UID/$3 2>/dev/null || true
                     """, "zsh", dmg.browser_download_url, Self.bundle, probe == nil ? "dev.claudetty.keeper" : ""]   // a probe's app has no keeper
-                swap.terminationHandler = { swap in DispatchQueue.main.async { self.newer?.swap = swap.terminationStatus == 0 ? .ready : .failed } }
+                swap.terminationHandler = { swap in DispatchQueue.main.async {
+                    guard swap.terminationStatus == 0 else {
+                        self.newer?.swap = .failed
+                        return
+                    }
+                    self.newer = nil
+                    self.update()
+                } }
                 if (try? swap.run()) == nil { newer?.swap = .failed }
             }
         }.resume()
@@ -707,9 +827,6 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         switch newer?.swap {
         case nil: checkUpdates(manual: true)
         case .failed: NSWorkspace.shared.open(newer!.page)
-        case .ready:
-            newer = nil
-            update()
         case .running: break
         }
     }
@@ -755,6 +872,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func onscreen() {
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.center()
+        guide?.center()
     }
 
     private func probeMenu() {
@@ -778,9 +896,12 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private func probeClick() {
-        guard let probe, let line = try? String(contentsOfFile: probe + "/click", encoding: .utf8), let frame = window.contentView?.superview else { return }
+        guard let probe, let line = try? String(contentsOfFile: probe + "/click", encoding: .utf8) else { return }
         try? FileManager.default.removeItem(atPath: probe + "/click")
         var parts = line.split { $0 == " " || $0.isNewline }.map(String.init)
+        let window: NSWindow = parts.first == "guide" ? guide ?? self.window : self.window
+        if parts.first == "guide" { parts.removeFirst() }
+        guard let frame = window.contentView?.superview else { return }
         func find(_ view: NSView, _ label: String, row: Bool = false) -> NSView? {
             let parts = label.split(separator: "#"), nth = parts.count > 1 ? Int(parts[1]) ?? 1 : 1
             func all(_ view: NSView) -> [NSView] { (view.accessibilityLabel() == String(parts.first ?? "") && (!row || view is Row) ? [view] : []) + view.subviews.flatMap(all) }
@@ -789,7 +910,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let moved = parts.last == "cmd-move", command = moved || parts.last == "cmd", shift = parts.last == "shift"
         if command || shift { parts.removeLast() }
         let mouse = { [window] (type: NSEvent.EventType, point: NSPoint, count: Int) in
-            NSEvent.mouseEvent(with: type, location: point, modifierFlags: command ? .command : shift ? .shift : [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window!.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1)!
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: command ? .command : shift ? .shift : [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1)!
         }
         if parts.first == "hover", parts.count == 3, let x = Double(parts[1]), let y = Double(parts[2]) {
             func all(_ view: NSView) -> [NSView] { (view is BarHover || view is HoverButton || view is TitleButton || view is Row ? [view] : []) + view.subviews.flatMap(all) }
@@ -836,7 +957,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 if !middle, !(view is SurfaceView) { NSApp.postEvent(mouse(.leftMouseUp, point, count), atStart: false) }
                 let press = mouse(middle ? .otherMouseDown : .leftMouseDown, point, count)
                 func commandKey(_ flags: NSEvent.ModifierFlags) {
-                    view.flagsChanged(with: NSEvent.keyEvent(with: .flagsChanged, location: point, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: self.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 0x37)!)
+                    view.flagsChanged(with: NSEvent.keyEvent(with: .flagsChanged, location: point, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 0x37)!)
                 }
                 if command {
                     if moved { commandKey(.command) }
@@ -850,10 +971,39 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
     }
 
+    private func probeTrace() {
+        guard let probe, let words = (try? String(contentsOfFile: probe + "/trace", encoding: .utf8))?.split(whereSeparator: \.isWhitespace), let seconds = words.first.flatMap({ Double($0) }) else { return }
+        try? FileManager.default.removeItem(atPath: probe + "/trace")
+        var log = "", frames: [CGImage] = [], tick = 0
+        let crop = words.count == 6 ? NSRect(x: Double(words[2]) ?? 0, y: Double(words[3]) ?? 0, width: Double(words[4]) ?? 0, height: Double(words[5]) ?? 0) : .zero
+        let start = CACurrentMediaTime()
+        func sparks(_ view: NSView) -> [Spark] { (view as? Spark).map { [$0] } ?? view.subviews.flatMap(sparks) }
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [unowned self] timer in
+            for spark in sparks(window.contentView!.superview!) {
+                let box = (spark.layer?.sublayers?.first?.presentation() as? CAShapeLayer)?.path?.boundingBox ?? .zero
+                log += String(format: "%.4f\t%@\t%@\t%.2f %.2f %.2f %.2f\t%@\n", CACurrentMediaTime() - start, spark.identifier?.rawValue ?? "bar", spark.shown, box.minX, box.minY, box.width, box.height, spark.drawn)
+            }
+            tick += 1
+            if words.count == 6, tick % 4 == 0, let root = window.contentView?.superview?.layer?.presentation(),
+               let context = CGContext(data: nil, width: Int(crop.width * 2), height: Int(crop.height * 2), bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                context.scaleBy(x: 2, y: 2)
+                context.translateBy(x: -crop.minX, y: -crop.minY)
+                root.render(in: context)
+                context.makeImage().map { frames.append($0) }
+            }
+            guard CACurrentMediaTime() - start > seconds else { return }
+            timer.invalidate()
+            try? log.write(toFile: probe + "/trace.log", atomically: true, encoding: .utf8)
+            try? FileManager.default.createDirectory(atPath: probe + "/clip", withIntermediateDirectories: true)
+            for (index, frame) in frames.enumerated() { try? NSBitmapImageRep(cgImage: frame).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: probe + String(format: "/clip/%03d.png", index))) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     private func probeShot() {
         guard let probe, FileManager.default.fileExists(atPath: probe + "/shot"), let view = window.contentView?.superview else { return }
         try? FileManager.default.removeItem(atPath: probe + "/shot")
-        for (shot, name) in [(view, "shot"), (window.attachedSheet?.contentView?.superview, "sheet")] {
+        for (shot, name) in [(view, "shot"), (window.attachedSheet?.contentView?.superview, "sheet"), (guide?.contentView?.superview, "guide")] {
             guard let shot, let rep = shot.bitmapImageRepForCachingDisplay(in: shot.bounds) else { continue }
             shot.layoutSubtreeIfNeeded()
             shot.cacheDisplay(in: shot.bounds, to: rep)
@@ -872,20 +1022,22 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         } }
         func rows(_ view: NSView) -> [String] {
             let drawn = (view as? Row)?.ghost ?? view, at = drawn.convert(NSPoint(x: drawn.bounds.midX, y: drawn.bounds.midY), to: nil)
-            let kind = view is Row ? "row" : view is Spark ? "spark" : view is Ring ? "ring" : nil
-            return (kind != nil && !view.isHiddenOrHasHiddenAncestor ? ["\(kind!)\t\(view.accessibilityLabel() ?? "")\t\((view as? Spark)?.shown ?? "\(view.isAccessibilitySelected())")\t\(Int(at.x)) \(Int(at.y))"] : []) + view.subviews.flatMap(rows)
+            let kind = view is Row ? "row" : view is Spark ? "spark" : view is Ring ? "ring" : view is Tile ? "tile" : nil
+            return (kind != nil && !view.isHiddenOrHasHiddenAncestor ? ["\(kind!)\t\(view.accessibilityLabel() ?? "")\t\((view as? Spark)?.shown ?? "\(view.isAccessibilitySelected())")\t\(Int(at.x)) \(Int(at.y))\((view as? Spark)?.loopAt ?? "")"] : []) + view.subviews.flatMap(rows)
         }
         let scrolled = sidebar.enclosingScrollView.map { ["scroll\t\(Int($0.contentView.bounds.minY))"] } ?? []
-        (NSApp.mainMenu?.items.compactMap(\.submenu) ?? []).forEach { $0.update() }
+        let top = NSApp.mainMenu?.items.compactMap(\.submenu) ?? [], appMenus = top + top.flatMap { $0.items.compactMap(\.submenu) }
+        appMenus.forEach { $0.update() }
         let glyphs: [(NSEvent.ModifierFlags, String)] = [(.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")]
-        let menus = (NSApp.mainMenu?.items.compactMap(\.submenu) ?? []).flatMap { menu in menu.items.map { item in
+        let menus = appMenus.flatMap { menu in menu.items.map { item in
             "menu\t\(menu.title)\t" + (item.isSeparatorItem ? "-\t" : "\(item.title)\(item.state == .on ? " ✓" : "")\t" + glyphs.filter { item.keyEquivalentModifierMask.union(item.keyEquivalent == item.keyEquivalent.lowercased() ? [] : .shift).contains($0.0) }.map(\.1).joined() + (item.keyEquivalent == "\r" ? "↩" : item.keyEquivalent.uppercased()))
         } }
-        let off = (NSApp.mainMenu?.items.compactMap(\.submenu) ?? []).flatMap { menu -> [String] in
+        let off = appMenus.flatMap { menu -> [String] in
             menu.items.filter { !$0.isEnabled && !$0.isSeparatorItem }.map { "menuoff\t\(menu.title)\t\($0.title)" }
         }
         let keys = pills.map { "pill\t\($0.key)\t\($0.frame.minX) \($0.frame.minY) \($0.frame.maxX) \($0.frame.maxY)\t\($0.frame.minY + KeyPill.baseline)" }
-        try? (labels(view) + grids + rows(view) + scrolled + keys + menus + off + ["spinner \(spinner != nil)", "rebuilds \(rebuilds)", "looking \(look != nil)", "badge \(NSApp.dockTile.badgeLabel ?? "")", "window \(window.isVisible ? "shown" : "hidden")", "frame \(Int(window.frame.minX)) \(Int(window.frame.minY)) \(Int(window.frame.width))x\(Int(window.frame.height))\(window.isZoomed ? " zoomed" : "")"]).joined(separator: "\n").write(toFile: probe + "/baselines", atomically: true, encoding: .utf8)
+        let guided = guide?.contentView?.superview.map { (labels($0) + rows($0)).map { "guide\t" + $0 } } ?? []
+        try? (labels(view) + grids + rows(view) + guided + scrolled + keys + menus + off + ["spinner \(spinner != nil)", "rebuilds \(rebuilds)", "looking \(look != nil)", "badge \(NSApp.dockTile.badgeLabel ?? "")", "window \(window.isVisible ? "shown" : "hidden")", "frame \(Int(window.frame.minX)) \(Int(window.frame.minY)) \(Int(window.frame.width))x\(Int(window.frame.height))\(window.isZoomed ? " zoomed" : "")"]).joined(separator: "\n").write(toFile: probe + "/baselines", atomically: true, encoding: .utf8)
     }
 
     @discardableResult private func open(_ request: [String: Any]) -> String? {
@@ -903,9 +1055,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         if let group = args.first {
             let name = args.count > 1 ? args[1] : group
-            if !tabs.contains(where: { $0.name == name }) { tabs.append(Tab(name: name, group: group, cwd: cwd, labels: ["named": tabs.first { $0.group == group }?.labels["named"] ?? (name == group ? "0" : "1")])) }
+            guard !name.contains("/") else { return "a tab name can't hold /" }
+            let named = tabs.first { $0.group == group }?.labels["named"] ?? (name == group ? "0" : "1")
+            if let tab = tabs.first(where: { $0.name == name }) {
+                if args.count > 1, tab.group != group, !regroup(name, to: group, named: named) { return "couldn't move \(name) to \(group)" }
+            } else { tabs.append(Tab(name: name, group: group, cwd: cwd, labels: ["named": named])) }
             let command = Array(args.dropFirst(2))
-            commands[name] = command.isEmpty ? [] : ["env", "PATH=" + (request["path"] as? String ?? "")] + command
+            if !command.isEmpty || commands[name] == nil { commands[name] = command.isEmpty ? [] : ["env", "PATH=" + (request["path"] as? String ?? "")] + command }
         }
         if tabs.isEmpty { tabs = [Tab(name: "main", group: "main", cwd: cwd, labels: ["named": "0"])] }
         let wanted = tabs.first { $0.name == (args.count > 1 ? args[1] : args.first) }
@@ -921,14 +1077,16 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             scroll.reflectScrolledClipView(scroll.contentView)
         }
         hidden = hidden && !focus
+        let guiding = first && predecessor == nil && Self.saved == nil && (probe == nil || FileManager.default.fileExists(atPath: probe! + "/setup"))
+        hidden = hidden || guiding
         if let predecessor, !predecessor.hidden {
             window.order(.below, relativeTo: predecessor.window)
             window.makeKey()
         } else if !hidden { window.makeKeyAndOrderFront(nil) }
         if first, !hidden, Self.saved?.fullScreen == true { window.toggleFullScreen(nil) }
         menuBarIcon()
-        if first, predecessor == nil { snap() }
         predecessor = nil
+        if guiding { openGuide(byItself: true) }
         if focus, probe == nil { NSApp.activate() }
         return nil
     }
@@ -944,7 +1102,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let before = state()
         let gone = tabs.filter { $0.pid != nil && !FileManager.default.fileExists(atPath: zmxDir + "/" + $0.name) }
         tabs.removeAll { tab in surfaces[tab.name] == nil && gone.contains(tab) }
-        for tab in gone { closed(tab.name) }
+        closed(gone.map(\.name))
         for i in tabs.indices { tabs[i].pid = live.first { $0 == tabs[i] }?.pid ?? tabs[i].pid }
         tabs += live.filter { !tabs.contains($0) && FileManager.default.fileExists(atPath: zmxDir + "/" + $0.name) }
         for group in groups where tabs.first(where: { $0.group == group })?.labels["named"] == nil { label(group, "named", named(group) ? "1" : "0") }
@@ -973,7 +1131,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     func windowDidEnterFullScreen(_ notification: Notification) { Self.resendSizes() }
     static func resendSizes() { children(getpid()).flatMap(children).forEach { kill($0, SIGWINCH) } }
     func windowDidMove(_ notification: Notification) { saveSoon() }
-    func windowDidResize(_ notification: Notification) { saveSoon() }
+    func windowDidResize(_ notification: Notification) {
+        tabBar.needsLayout = true
+        saveSoon()
+    }
     func applicationWillTerminate(_ notification: Notification) { save() }
 
     private func save(handover: State.Handover? = nil) {
@@ -986,7 +1147,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                           lastTab: lastTab.mapValues(\.name), zoomed: zoomed, recent: recent, handover: handover,
                           fullScreen: window.styleMask.contains(.fullScreen), scrolled: surfaces.reduce(into: Self.saved?.scrolled ?? [:]) { $0[$1.key] = $1.value.scrolled }.filter { $0.value > 0 },
                           boot: Self.boot, kept: tabs.map { Tab(name: $0.name, group: $0.group, cwd: $0.folder, labels: $0.labels) },
-                          resume: tabs.reduce(into: [:]) { ids, tab in if tab.claude != nil { ids[tab.name] = tab.session } }, sidebarWidth: sidebarWidth)
+                          resume: tabs.reduce(into: [:]) { ids, tab in if tab.claude != nil { ids[tab.name] = tab.session } }, sidebarWidth: sidebarWidth,
+                          asleep: commands.filter { name, _ in tabs.contains { $0.name == name && $0.labels["sleep"] != nil } })
         try? FileManager.default.createDirectory(atPath: (Self.stateFile as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try? JSONEncoder().encode(state).write(to: URL(fileURLWithPath: Self.stateFile), options: .atomic)
     }
@@ -1005,8 +1167,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     @objc private func showWindow() {
-        hidden = false
-        window.makeKeyAndOrderFront(nil)
+        hidden = guide != nil
+        (guide ?? window).makeKeyAndOrderFront(nil)
         menuBarIcon()
         if probe == nil { NSApp.activate() }
     }
@@ -1042,7 +1204,6 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         var rows: [(item: NSMenuItem, detail: String)] = []
-        let cap = { (text: String) in text.count > 40 ? text.prefix(39).trimmingCharacters(in: .whitespaces) + "…" : text }
         menuMarks = []
         let row = { (title: String, detail: String, action: Selector, target: String, claude: Bool, mark: String?) in
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
@@ -1059,14 +1220,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let waiting = tabs.filter { $0.claude == "waiting" }
         if !waiting.isEmpty {
             menu.addItem(.sectionHeader(title: "Needs you"))
-            for tab in waiting { row(tab.title, cap(tab.action.map { $0.ask ?? $0.text } ?? ""), #selector(pickTab), tab.name, true, "blocked") }
+            for tab in waiting { row(tab.title, Self.cap(tab.action.map { $0.ask ?? $0.text } ?? "", 40), #selector(pickTab), tab.name, true, "blocked") }
             menu.addItem(.separator())
         }
         menu.addItem(.sectionHeader(title: "Groups"))
         for group in groups {
             let groupTabs = tabs.filter { $0.group == group }
             let activity = activity(groupTabs)
-            row(group, [activity.map { cap($0.what) }, activity?.ago, agents(groupTabs)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "), #selector(pickGroup), group, activity != nil, groupTabs.lazy.compactMap(\.mark).first)
+            row(group, [activity.map { Self.cap($0.what, 40) }, activity?.ago, agents(groupTabs)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "  "), #selector(pickGroup), group, activity != nil, groupTabs.lazy.compactMap(\.mark).first)
         }
         let width = { (text: String, font: NSFont) in (text as NSString).size(withAttributes: [.font: font]).width }
         let column = NSMutableParagraphStyle()
@@ -1077,6 +1238,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             item.attributedTitle = text
         }
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Set Up ClaudeTTY…", action: #selector(setUp), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Show ClaudeTTY", action: #selector(showWindow), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Quit ClaudeTTY", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
@@ -1165,7 +1327,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var drawing: Bool { probe != nil || window.occlusionState.contains(.visible) }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        guard let view = selected.flatMap({ surfaces[$0.name] }), view.cellSize.height > 0, !Body.unsnapped(sender, frameSize) else { return frameSize }
+        guard let view = selected.flatMap({ surfaces[$0.name] }), view.cellSize.height > 0, !Body.unsnapped(sender, frameSize), !UserDefaults.standard.bool(forKey: Self.freeSizeKey) else { return frameSize }
         func snap(_ proposed: CGFloat, _ now: CGFloat, _ surface: CGFloat, _ padding: CGFloat, _ cell: CGFloat) -> CGFloat {
             proposed - (surface + proposed - now - padding).truncatingRemainder(dividingBy: cell)
         }
@@ -1173,11 +1335,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                       height: snap(frameSize.height, sender.frame.height, (view.superview ?? view).frame.height, Self.padding.height, view.cellSize.height))
     }
 
-    private func snap() {
-        let size = windowWillResize(window, to: window.frame.size)
-        window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - size.height, width: size.width, height: size.height), display: true)
-        panes.values.forEach { $0.body.fit() }
-    }
+    private func refit() { panes.values.forEach { $0.body.fit() } }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         app.map { ghostty_app_set_focus($0, true) }
@@ -1207,18 +1365,15 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func menu() -> NSMenu {
         let main = NSMenu()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Secure Keyboard Entry", action: #selector(toggleSecure), keyEquivalent: "")
         appMenu.addItem(withTitle: "Bypass Permissions in New Claude Tabs", action: #selector(toggleBypass), keyEquivalent: "")
-        appMenu.addItem(withTitle: "Simple Spinner", action: #selector(pickSpinner), keyEquivalent: "").representedObject = "simple"
-        if Spark.morph != nil { appMenu.addItem(withTitle: "Sparkle Spinner", action: #selector(pickSpinner), keyEquivalent: "").representedObject = "sparkle" }
+        appMenu.addItem(withTitle: "Secure Keyboard Entry", action: #selector(toggleSecure), keyEquivalent: "")
         let sounds = NSMenu(title: "Notification Sound")
         sounds.addItem(withTitle: "None", action: #selector(pickSound), keyEquivalent: "").representedObject = ""
-        sounds.addItem(.separator())
-        for file in ((try? FileManager.default.contentsOfDirectory(atPath: "/System/Library/Sounds")) ?? []).sorted() {
-            sounds.addItem(withTitle: (file as NSString).deletingPathExtension, action: #selector(pickSound), keyEquivalent: "").representedObject = (file as NSString).deletingPathExtension
-        }
+        Self.sounds(sounds, action: #selector(pickSound))
+        sounds.addItem(withTitle: "Add Sound…", action: #selector(addSound), keyEquivalent: "")
         appMenu.addItem(withTitle: "Notification Sound", action: nil, keyEquivalent: "").submenu = sounds
         if Self.released { appMenu.addItem(withTitle: "Check for Updates", action: #selector(pickUpdate), keyEquivalent: "") }
+        appMenu.addItem(withTitle: "Set Up ClaudeTTY…", action: #selector(setUp), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit ClaudeTTY", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let edit = NSMenu(title: "Edit")
@@ -1238,12 +1393,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         view.addItem(withTitle: "Go to Tab…", action: #selector(goToTab), keyEquivalent: "p")
         view.addItem(withTitle: "Next Waiting Tab", action: #selector(nextWaiting), keyEquivalent: "U")
         view.addItem(withTitle: "Rename Group", action: #selector(renameSelected), keyEquivalent: "R")
-        view.addItem(withTitle: "Show Pane Buttons", action: #selector(togglePaneButtons), keyEquivalent: "")
-        view.addItem(withTitle: "Always Show Pane Buttons", action: #selector(toggleAlwaysButtons), keyEquivalent: "")
-        view.addItem(withTitle: "Show Context Size", action: #selector(toggleContext), keyEquivalent: "")
-        for (title, picks) in [("Cursor", [("Block", ["cursor-style": "block"]), ("Bar", ["cursor-style": "bar"]), ("Underline", ["cursor-style": "underline"]), ("Hollow Block", ["cursor-style": "block_hollow"]), ("", [:]), ("Blinking", ["cursor-style-blink": ""])]),
-                               ("Background", [("Opaque", ["background-opacity": "1"]), ("90%", ["background-opacity": "0.9"]), ("80%", ["background-opacity": "0.8"]), ("70%", ["background-opacity": "0.7"]), ("", [:]), ("Blur", ["background-blur": "20"])]),
-                               ("Padding", [("Small", ["window-padding-x": "1", "window-padding-y": "0,4"]), ("Medium", ["window-padding-x": "8", "window-padding-y": "4,8"]), ("Large", ["window-padding-x": "16", "window-padding-y": "8,16"])])] {
+        view.addItem(.separator())
+        let theme = NSMenu(title: "Theme")
+        for title in ["Light", "Dark", "System"] { theme.addItem(withTitle: title, action: #selector(pickTheme), keyEquivalent: "") }
+        view.addItem(withTitle: "Theme", action: nil, keyEquivalent: "").submenu = theme
+        for (title, picks) in [("Transparency", Self.transparencies.map { ($0.title, ["background-opacity": $0.value]) }), ("Blur", Self.blurs.map { ($0.title, ["background-blur": $0.value]) }),
+                               ("Padding", [("Small", ["window-padding-x": "1", "window-padding-y": "0,4"]), ("Medium", ["window-padding-x": "8", "window-padding-y": "4,8"]), ("Large", ["window-padding-x": "16", "window-padding-y": "8,16"])]),
+                               ("Cursor", [("Block", ["cursor-style": "block"]), ("Bar", ["cursor-style": "bar"]), ("Underline", ["cursor-style": "underline"]), ("Hollow Block", ["cursor-style": "block_hollow"]), ("", [:]), ("Blinking", ["cursor-style-blink": ""])])] {
             let submenu = NSMenu(title: title)
             for (title, pick) in picks {
                 guard !title.isEmpty else {
@@ -1254,6 +1410,31 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
             view.addItem(withTitle: title, action: nil, keyEquivalent: "").submenu = submenu
         }
+        let spinner = NSMenu(title: "Icons")
+        for (setting, title, value) in [("spinner", "Dots", "dots"), ("spinner", "Simple", "simple"), ("spinner", "Clawd", "clawd")] + (Spark.morph == nil ? [] : [("spinner", "Sparkle", "sparkle")])
+            + [("-", "", ""), ("sleep z", "Show Sleep Z's", "toggle"), ("", "Clawd Waiting on a Command", ""), ("clawd wait", "Terminal", "A"), ("clawd wait", "Hourglass", "B"), ("clawd wait", "Fishing", "C")] {
+            if setting == "-" {
+                spinner.addItem(.separator())
+            } else if setting.isEmpty {
+                spinner.addItem(.separator())
+                spinner.addItem(.sectionHeader(title: title))
+            } else {
+                spinner.addItem(withTitle: title, action: #selector(pickSpinner), keyEquivalent: "").representedObject = [setting, value]
+            }
+        }
+        view.addItem(withTitle: "Icons", action: nil, keyEquivalent: "").submenu = spinner
+        view.addItem(.separator())
+        view.addItem(withTitle: "Show Context Size", action: #selector(toggleContext), keyEquivalent: "")
+        let buttons = NSMenu(title: "Pane Buttons")
+        for title in ["Off", "On Hover", "Always"] { buttons.addItem(withTitle: title, action: #selector(pickPaneButtons), keyEquivalent: "") }
+        view.addItem(withTitle: "Pane Buttons", action: nil, keyEquivalent: "").submenu = buttons
+        view.addItem(.separator())
+        view.addItem(withTitle: "Sleep Idle Tabs", action: #selector(toggleSleep), keyEquivalent: "")
+        let warm = NSMenu(title: "Keep Asleep Tabs Warm")
+        for title in ["Off", "1 Hour", "6 Hours"] { warm.addItem(withTitle: title, action: #selector(pickWarm), keyEquivalent: "") }
+        view.addItem(withTitle: "Keep Asleep Tabs Warm", action: nil, keyEquivalent: "").submenu = warm
+        view.addItem(.separator())
+        view.addItem(withTitle: "Character Perfect Sizing", action: #selector(toggleFreeSize), keyEquivalent: "")
         view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen), keyEquivalent: "f").keyEquivalentModifierMask = [.control, .command]
         let file = NSMenu(title: "File")
         for (title, action, key, modifiers) in [("New Terminal Tab", "new_tab", "t", [.command]), ("New Claude Tab", "claude", "t", [.command, .option]), ("Reopen Closed Tab", "reopen", "T", [.command]), ("New Group", "new_window", "n", [.command]), ("", "", "", []),
@@ -1298,8 +1479,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         sidebar.spacing = 4
         tabBar.spacing = 2
         tabBar.alignment = .firstBaseline
-        tabBar.appearance = NSAppearance(named: .darkAqua)
-        let blank = Blank(newFolder: { [unowned self] in newFolder() }) { [unowned self] in newGroup() }
+        let blank = Blank(newFolder: { [unowned self] in newFolder() }, freed: { [unowned self] in Self.freed(tabs) }) { [unowned self] in newGroup() }
         blank.addSubview(sidebar)
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -1339,11 +1519,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         self.side = side
         let besideSidebar = tabBar.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: 10)
         besideSidebar.priority = .init(749)
+        tabBar.stop = titleButtons
         titleButtons.spacing = 10
         titleButtons.appearance = tabBar.appearance
         titleHover.views = { [unowned self] in titleButtons.arrangedSubviews }
-        for view in [side, tabBar, terminal, buttons, titleButtons, titleHover, edge] { root.addSubview(view) }
-        for view in [side, scroll, blank, sidebar, tabBar, terminal, buttons, titleButtons, titleHover, edge] { view.translatesAutoresizingMaskIntoConstraints = false }
+        backing.wantsLayer = true
+        header.wantsLayer = true
+        for view in [backing, header, side, tabBar, terminal, buttons, titleButtons, titleHover, edge] { root.addSubview(view) }
+        for view in [backing, header, side, scroll, blank, sidebar, tabBar, terminal, buttons, titleButtons, titleHover, edge] { view.translatesAutoresizingMaskIntoConstraints = false }
         NSLayoutConstraint.activate([
             sideSlide,
             side.topAnchor.constraint(equalTo: root.topAnchor),
@@ -1373,7 +1556,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             besideSidebar,
             tabBar.leadingAnchor.constraint(greaterThanOrEqualTo: buttons.trailingAnchor, constant: 16),
             tabBar.firstBaselineAnchor.constraint(equalTo: root.topAnchor, constant: titlebar / 2 + TitleButton.font.capHeight / 2),
-            tabBar.trailingAnchor.constraint(lessThanOrEqualTo: titleButtons.leadingAnchor, constant: -12),
+            tabBar.trailingAnchor.constraint(lessThanOrEqualTo: titleButtons.leadingAnchor, constant: -tabBar.gap),
             titleButtons.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             titleButtons.centerYAnchor.constraint(equalTo: root.topAnchor, constant: titlebar / 2),
             titleHover.topAnchor.constraint(equalTo: root.topAnchor),
@@ -1382,6 +1565,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             titleHover.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             terminal.leadingAnchor.constraint(equalTo: side.trailingAnchor),
             fill,
+            backing.leadingAnchor.constraint(equalTo: side.trailingAnchor),
+            backing.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            backing.topAnchor.constraint(equalTo: root.topAnchor),
+            backing.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            header.leadingAnchor.constraint(equalTo: side.trailingAnchor),
+            header.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            header.topAnchor.constraint(equalTo: root.topAnchor),
+            header.bottomAnchor.constraint(equalTo: terminal.topAnchor),
             terminal.topAnchor.constraint(equalTo: root.topAnchor, constant: titlebar / 2 + Self.paneBar / 2),
             terminal.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
@@ -1453,10 +1644,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
             now.insert(tab.name)
         }
-        for name in placed.subtracting(now) { surfaces[name]?.setVisible(false) }
-        for name in now.subtracting(placed) { surfaces[name]?.setVisible(drawing) }
+        let left = placed.subtracting(now), came = now.subtracting(placed), launch = placed.isEmpty
+        for name in left { surfaces[name]?.setVisible(false) }
+        for name in came { surfaces[name]?.setVisible(drawing) }
         placed = now
+        for name in left where woken[name] != nil { woken[name] = Date() }
+        (launch ? Set(tabs.map(\.name)) : left.union(came)).forEach(nap)
         if window.firstResponder === window { window.makeFirstResponder(surfaces[selected.name]) }
+        edges()
     }
 
     private func park(_ view: NSView) {
@@ -1482,19 +1677,20 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let typing = (window.firstResponder as? NSText).map { !sequence(first: $0 as NSView, next: \.superview).contains { $0 is FindBar } } ?? false
-        let asking = window.attachedSheet != nil || typing
+        let asking = window.attachedSheet != nil || typing || guide != nil
         let groups = item.action == #selector(pickGroup) || item.action == #selector(pickTab)
         if item.action == #selector(toggleSecure) { item.state = UserDefaults.standard.bool(forKey: Self.secureKey) ? .on : .off }
         if item.action == #selector(pickSound) { item.state = item.representedObject as? String == UserDefaults.standard.string(forKey: Self.soundKey) ?? "Glass" ? .on : .off }
-        if item.action == #selector(pickSpinner) { item.state = item.representedObject as? String == Spark.style ? .on : .off }
-        if item.action == #selector(togglePaneButtons) { item.state = UserDefaults.standard.bool(forKey: Self.buttonsKey) ? .off : .on }
-        if item.action == #selector(toggleAlwaysButtons) {
-            item.state = BarHover.always ? .on : .off
-            if UserDefaults.standard.bool(forKey: Self.buttonsKey) { return false }
+        if item.action == #selector(pickSpinner), let pick = item.representedObject as? [String] {
+            item.state = (pick[1] == "toggle" ? Spark.settings[pick[0]] != "off" : Spark.settings[pick[0]] == pick[1]) ? .on : .off
+            if pick[0] == "sleep z" { return ["dots", "clawd"].contains(Spark.style) }
+            if pick[0] != "spinner" { return Spark.style == "clawd" }
         }
+        if item.action == #selector(pickTheme) { item.state = item.title == ["light": "Light", "dark": "Dark"][UserDefaults.standard.string(forKey: Self.themeKey) ?? ""] ?? "System" ? .on : .off }
+        if item.action == #selector(pickPaneButtons) { item.state = item.title == Self.paneButtons ? .on : .off }
         if item.action == #selector(pickLook), let pick = item.representedObject as? [String: String] {
             item.state = pick.allSatisfy { Self.look[$0] == $1 } ? .on : .off
-            if pick["background-blur"] != nil { return Self.look["background-opacity"] != "1" }
+            if pick["background-blur"] != nil, Self.look["background-opacity"] == "1" { return false }
         }
         if item.action == #selector(toggleBypass) { item.state = UserDefaults.standard.bool(forKey: Self.askKey) ? .off : .on }
         if item.action == #selector(pickUpdate) {
@@ -1502,11 +1698,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             case nil: "Check for Updates"
             case .running: "Updating to \(newer!.version)…"
             case .failed: "Update to \(newer!.version)…"
-            case .ready: "Restart to Update"
             }
             return newer?.swap != .running
         }
+        if item.action == #selector(toggleSleep) { item.state = UserDefaults.standard.bool(forKey: Self.wakeKey) ? .off : .on }
+        if item.action == #selector(pickWarm) { item.state = Self.hours(item.title) == UserDefaults.standard.double(forKey: Self.warmKey) ? .on : .off }
         if item.action == #selector(toggleContext) { item.state = UserDefaults.standard.bool(forKey: Self.contextKey) ? .off : .on }
+        if item.action == #selector(toggleFreeSize) { item.state = UserDefaults.standard.bool(forKey: Self.freeSizeKey) ? .off : .on }
         if item.menu?.supermenu === NSApp.mainMenu, unseen && !groups || asking && (groups || item.action == #selector(fileAction) || item.action == #selector(goToTab)) { return false }
         if item.action == #selector(nextWaiting) { return longestWaiting != nil }
         let zoom = item.action == #selector(toggleZoom) || item.action == #selector(fileAction) && item.representedObject as? String == "toggle_split_zoom"
@@ -1528,11 +1726,11 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             return body
         }
         let bar = PaneBar()
+        bar.wantsLayer = true
         bar.doubleClick = { [unowned self] in newTab(pane: id) }
         bar.spacing = 2
         bar.setHuggingPriority(.init(249), for: .horizontal)
         bar.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 10)
-        bar.appearance = NSAppearance(named: .darkAqua)
         let pane = NSView()
         for view in [bar, body] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -1564,7 +1762,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private func makeSurface(_ tab: Tab) -> SurfaceView {
-        let labels = (["group=" + tab.group] + tab.labels.map { $0.key + "=" + $0.value }).joined(separator: " ")
+        var tab = tab
+        if let index = tabs.firstIndex(of: tab), tabs[index].labels.removeValue(forKey: "sleep") != nil {
+            tabs[index].labels["freed"] = nil
+            tab = tabs[index]
+            woken[tab.name] = Date()
+        }
+        let labels = (["group=" + Self.encoded(tab.group)] + tab.labels.map { $0.key + "=" + Self.encoded($0.value) }).joined(separator: " ")
         let command = (["env", "ZMX_NO_DETACH_KEY=1", Self.executable, "--attach", "--labels", labels, tab.name] + (commands[tab.name].map { $0.isEmpty ? [] : Self.attached + $0 } ?? []))
             .map(Self.quoted).joined(separator: " ")
         let view = SurfaceView(app: app!, command: command, cwd: tab.cwd)
@@ -1576,6 +1780,12 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             rebuild()
         }
         view.onDrop = { [unowned self] in Self.dropTexts($0, claude: tabs.first { $0.name == tab.name }?.claude != nil) }
+        view.tabItems = { [unowned self] in
+            guard let tab = tabs.first(where: { $0.name == tab.name }) else { return (false, nil, []) }
+            let layout = layout(tab.group)
+            let zoom = layout.panes.count > 1 ? [item(zoomedPane(tab.group, in: layout) == nil ? "Zoom Pane" : "Unzoom Pane", #selector(toggleZoom), tab.name)] : []
+            return (tab.claude != nil, Self.brief(tab), scheduleItems(tab) + [.separator()] + tabControls(tab) + [.separator()] + zoom + [item("Close Tab", #selector(closeTabs), [tab.name])])
+        }
         view.frame = terminal.bounds
         view.autoresizingMask = [.width, .height]
         view.isHidden = true
@@ -1595,7 +1805,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private static let attached = ["sh", "-c", "i=0; until [ -n \"$(\"$0\" print-env \"$ZMX_SESSION\")\" ] || [ $i -ge 100 ]; do sleep 0.05; i=$((i+1)); done; exec \"$@\"", zmx]
-    private static func claude(_ args: String) -> [String] { ["zsh", "-lic", "exec env BUN_OPTIONS=--smol claude " + args] }
+    private static func claude(_ args: String, program: String = "claude") -> [String] { ["zsh", "-lic", "exec env BUN_OPTIONS=--smol " + program + (light ? " --settings '{\"theme\":\"light\"}' " : " ") + args] }
     private static func quoted(_ word: String) -> String { "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     private static let boot: Int = {
         var time = timeval(), size = MemoryLayout<timeval>.size
@@ -1607,6 +1817,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         var labels = tabs.first { $0.group == from.group }!.labels
         labels["pane"] = pane
         labels["title"] = nil
+        labels["viewer"] = nil
         labels["rank"] = nil
         let tab = Tab(name: name, group: from.group, cwd: cwd, labels: labels)
         let layout = layout(from.group)
@@ -1644,9 +1855,38 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         NSSound(named: sound)?.play()
     }
 
+    private static func sounds(_ menu: NSMenu, action: Selector?) {
+        for folder in ["/System/Library/Sounds", userSounds] {
+            menu.addItem(.separator())
+            for file in ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).sorted() where !file.hasPrefix(".") {
+                menu.addItem(withTitle: (file as NSString).deletingPathExtension, action: action, keyEquivalent: "").representedObject = (file as NSString).deletingPathExtension
+            }
+        }
+        menu.addItem(.separator())
+    }
+
+    private static let userSounds = probe.map { $0 + "/sounds" } ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Sounds").path
+
+    @objc private func addSound(_ item: NSMenuItem) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio]
+        guard let url = probe.map({ URL(fileURLWithPath: (try? String(contentsOfFile: $0 + "/open", encoding: .utf8))?.trimmingCharacters(in: .newlines) ?? "") }) ?? (panel.runModal() == .OK ? panel.url : nil), let menu = item.menu else { return }
+        let target = URL(fileURLWithPath: Self.userSounds).appendingPathComponent(url.lastPathComponent)
+        do {
+            try FileManager.default.createDirectory(atPath: Self.userSounds, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: target.path) { try FileManager.default.copyItem(at: url, to: target) }
+        } catch { return tell("Couldn't add \(url.lastPathComponent).") }
+        let name = url.deletingPathExtension().lastPathComponent
+        let picked = menu.items.last { $0.representedObject as? String == name } ?? menu.insertItem(withTitle: name, action: #selector(pickSound), keyEquivalent: "", at: menu.index(of: item))
+        picked.representedObject = name
+        pickSound(picked)
+    }
+
     @objc private func pickSpinner(_ item: NSMenuItem) {
-        Spark.style = item.state == .on ? "dots" : item.representedObject as? String ?? "dots"
-        UserDefaults.standard.set(Spark.style, forKey: Spark.styleKey)
+        guard let pick = item.representedObject as? [String] else { return }
+        let value = pick[1] != "toggle" ? pick[1] : Spark.settings[pick[0]] == "off" ? "on" : "off"
+        Spark.settings[pick[0]] = value
+        UserDefaults.standard.set(value, forKey: pick[0] + " " + zmxDir)
         rebuild()
         animate()
     }
@@ -1663,35 +1903,80 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         rebuild()
     }
 
-    @objc private func togglePaneButtons() {
-        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.buttonsKey), forKey: Self.buttonsKey)
+    private static var paneButtons: String { UserDefaults.standard.bool(forKey: buttonsKey) ? "Off" : BarHover.always ? "Always" : "On Hover" }
+
+    @objc private func pickPaneButtons(_ item: NSMenuItem) {
+        UserDefaults.standard.set(item.title == "Off", forKey: Self.buttonsKey)
+        UserDefaults.standard.set(item.title == "On Hover", forKey: BarHover.hoverKey)
         rebuild()
     }
 
-    @objc private func toggleAlwaysButtons() {
-        UserDefaults.standard.set(BarHover.always, forKey: BarHover.hoverKey)
+    @objc private func pickTheme(_ item: NSMenuItem) {
+        UserDefaults.standard.set(item.title == "System" ? nil : item.title.lowercased(), forKey: Self.themeKey)
+        theme()
+    }
+
+    private func theme() { NSApp.appearance = ["light": NSAppearance(named: .aqua), "dark": NSAppearance(named: .darkAqua)][UserDefaults.standard.string(forKey: Self.themeKey) ?? ""] ?? nil }
+
+    private var lit: Bool?
+    private func relight() {
+        guard lit != Self.light, app != nil else { return }
+        lit = Self.light
+        relook()
         rebuild()
     }
 
     @objc private func pickLook(_ item: NSMenuItem) {
-        guard let app, var pick = item.representedObject as? [String: String] else { return }
-        if pick.allSatisfy({ Self.look[$0] == $1 }), pick.keys.contains(where: { $0 == "cursor-style-blink" || $0 == "background-blur" }) { pick = pick.mapValues { $0.isEmpty ? "false" : "0" } }
+        guard var pick = item.representedObject as? [String: String] else { return }
+        if pick.allSatisfy({ Self.look[$0] == $1 }), pick["cursor-style-blink"] != nil { pick = ["cursor-style-blink": "false"] }
         UserDefaults.standard.set((UserDefaults.standard.dictionary(forKey: Self.lookKey) ?? [:]).merging(pick) { $1 }, forKey: Self.lookKey)
-        guard let config = Self.config() else { return }
+        relook()
+        refit()
+    }
+
+    private func relook() {
+        guard let app, let config = Self.config() else { return }
         ghostty_app_update_config(app, config)
         ghostty_config_free(config)
         paint()
-        snap()
     }
 
     @objc private func toggleBypass() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.askKey), forKey: Self.askKey) }
+
+    @objc private func toggleSleep() {
+        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.wakeKey), forKey: Self.wakeKey)
+        tabs.map(\.name).forEach(nap)
+    }
+
+    private static func hours(_ title: String) -> Double { Double(title.prefix { $0.isNumber }) ?? 0 }
+
+    @objc private func pickWarm(_ item: NSMenuItem) {
+        UserDefaults.standard.set(Self.hours(item.title), forKey: Self.warmKey)
+        tabs.map(\.name).forEach(warm)
+    }
+
+    @objc private func toggleFreeSize() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.freeSizeKey), forKey: Self.freeSizeKey) }
 
     @objc private func toggleContext() {
         UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.contextKey), forKey: Self.contextKey)
         rebuild()
     }
 
-    static func tokens(_ count: Int) -> String { count < 1000 ? "\(count)" : "\(Int((Double(count) / 1000).rounded()))k" }
+    static func cap(_ text: String, _ limit: Int) -> String { text.count > limit ? text.prefix(limit - 1).trimmingCharacters(in: .whitespaces) + "…" : text }
+    static func model(_ id: String) -> String {
+        let parts = id.split(separator: "-").dropFirst().filter { $0.count < 8 } as [Substring]
+        guard let family = parts.first, parts.dropFirst().allSatisfy({ Int($0) != nil }) else { return String(id.trimmingPrefix("claude-")) }
+        return ([family.capitalized] + [parts.dropFirst().joined(separator: ".")]).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+    static func tokens(_ count: Int) -> String { count < 1000 ? "\(count)" : count < 999_500 ? "\(Int((Double(count) / 1000).rounded()))k" : String(format: "%gM", (Double(count) / 100_000).rounded() / 10) }
+    static func freed(_ tabs: [Tab]) -> Int64 { tabs.reduce(0) { $0 + ($1.labels["sleep"] == nil ? 0 : Int64($1.labels["freed"] ?? "") ?? 0) } }
+    static func brief(_ tab: Tab) -> String? {
+        guard let context = tab.context, let reply = tab.reply, let model = (reply["message"] as? [String: Any])?["model"] as? String else { return nil }
+        let effort = (reply["effort"] as? String).flatMap { ["low": "(L)", "medium": "(M)", "high": "(H)", "xhigh": "(XH)", "max": "(Max)"][$0] }
+        let name = Self.model(model), version = Double(name.split(separator: " ").last ?? "") ?? 0
+        let window = (reply["requestedModel"] as? String)?.hasSuffix("[1m]") == true || version >= 5 || name.hasPrefix("Opus") && version >= 4.7 ? "1M" : "200k"
+        return [name, effort, tokens(context) + "/" + window].compactMap { $0 }.joined(separator: " ")
+    }
 
     private func meter(_ field: NSTextField, _ tab: Tab) {
         field.stringValue = tab.context.map(Self.tokens) ?? ""
@@ -1853,7 +2138,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         for (index, group) in groups.enumerated() {
             let groupTabs = tabs.filter { $0.group == group }
             let item = groupItem(group, at: index, in: menu)
-            item.view = GroupEntry(item, state: status(groupTabs).map { ([$0] + [agents(groupTabs)].compactMap { $0 }).joined(separator: " · ") }, place: place(groupTabs[0].folder),
+            item.view = GroupEntry(item, state: status(groupTabs).map { ([$0] + [agents(groupTabs)].compactMap { $0 }).joined(separator: "  ") }, place: place(groupTabs[0].folder),
                                    bar: colors.first { $0.name == groupTabs[0].labels["color"] }?.color)
         }
         let width = menu.items.compactMap { $0.view?.frame.width }.max() ?? 0
@@ -1862,9 +2147,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     @discardableResult private func groupItem(_ group: String, at index: Int, in menu: NSMenu) -> NSMenuItem {
-        let item = menu.addItem(withTitle: title(group), action: #selector(pickGroup), keyEquivalent: Self.digitKey(index, of: groups.count) ?? "")
-        item.target = self
-        item.representedObject = group
+        let item = add(menu, title(group), #selector(pickGroup), group, key: Self.digitKey(index, of: groups.count) ?? "")
         item.state = group == selected?.group ? .on : .off
         return item
     }
@@ -1982,6 +2265,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         activities = [:]
         tabSparks = [:]
         meters = [:]
+        tabRows = [:]
         folderBadges = [:]
         groupRows = [:]
         folderRows = [:]
@@ -2029,6 +2313,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         title.font = TitleButton.font
         title.contentTintColor = .labelColor
         title.toolTip = "Switch group (⌘1-9)"
+        title.cell?.lineBreakMode = .byTruncatingTail
         let layout = layout(selected.group), focused = pane(of: selected, in: layout)
         arrange(layout)
         let rows = { [unowned self] (pane: String) -> [NSView] in
@@ -2037,14 +2322,16 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             if pane == focused { paneRows = [] }
             return paneTabs.map { tab in
                 let lone = paneTabs.count == 1
-                let spark = tab.claude.map { Spark($0, phase: 0, selected: false, mark: tab.mark) }
+                let spark = tab.claude.map { Spark($0, phase: 0, selected: false, key: tab.name, mark: tab.mark) }
+                spark?.cold = activities[tab.group]?.cold(tab.name) ?? false
                 tabSparks[tab.name] = spark
                 let meter = tab.claude != nil && !UserDefaults.standard.bool(forKey: Self.contextKey) ? NSTextField(labelWithString: "") : nil
                 meter.map { self.meter($0, tab) }
                 meters[tab.name] = meter
                 let row = Row(named ? tab.title : "", icon: tab.claude != nil || !named ? nil : NSImage(systemSymbolName: "apple.terminal.fill", accessibilityDescription: "Shell"), spark: spark, meter: meter, selected: lone || tab == pick, fill: lone ? .clear : pane == focused ? Row.pickFill : Row.hoverFill,
                               close: lone && layout.panes.count == 1 ? nil : { [unowned self] in closing([tab.name]) }) { [unowned self] in select(tab) }
-                row.contextMenu = { [unowned self, unowned row] in tabMenu(tab, row, paneTabs.map(\.name), layout) }
+                row.contextMenu = { [unowned self] in tabMenu(tab, paneTabs.map(\.name), layout) }
+                tabRows[tab.name] = row
                 if pane == focused { paneRows.append(row) }
                 row.rename = { [unowned self, unowned row] in rename(tab: tab.name, in: row) }
                 row.lane = "tabs"
@@ -2060,7 +2347,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             let focusedRows = rows(focused)
             let chevron = BarIcon(image: NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)!)
             chevron.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
-            chevron.contentTintColor = NSColor(white: 1, alpha: 0.4)
+            chevron.contentTintColor = ink(0.4)
             tabBar.setViews([title] + (named ? [chevron] : []) + focusedRows, in: .leading)
             if named { tabBar.setCustomSpacing(focusedRows.count > 1 ? 6 : 2, after: chevron) }
             titleButtons.setViews(paneButtons(focused, shown: titleHover.inside), in: .leading)
@@ -2082,10 +2369,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         groupsMenu.addItem(.separator())
         let paneTabs = tabs.filter { $0.group == selected.group && pane(of: $0, in: layout) == focused }
         for (index, tab) in paneTabs.enumerated() {
-            let item = groupsMenu.addItem(withTitle: tab.title, action: #selector(pickTab), keyEquivalent: Self.digitKey(index, of: paneTabs.count) ?? "")
+            let item = add(groupsMenu, tab.title, #selector(pickTab), tab.name, key: Self.digitKey(index, of: paneTabs.count) ?? "")
             item.keyEquivalentModifierMask = .control
-            item.target = self
-            item.representedObject = tab.name
             item.state = tab == selected ? .on : .off
         }
         if paneTabs.count < 9, let last = groupsMenu.items.last?.copy() as? NSMenuItem {
@@ -2098,14 +2383,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private func place(_ folder: String) -> String {
-        [(folder as NSString).abbreviatingWithTildeInPath, Self.branch(folder)].compactMap { $0 }.joined(separator: " · ")
+        [(folder as NSString).abbreviatingWithTildeInPath, Self.branch(folder)].compactMap { $0 }.joined(separator: "  ")
     }
 
     private func status(_ groupTabs: [Tab]) -> String? {
         let states = groupTabs.map(\.claude)
-        guard let state = (["waiting", "working", "idle"] as [String]).first(where: { states.contains($0) }) else { return nil }
+        guard let state = (["waiting", "working", "background", "idle"] as [String]).first(where: { states.contains($0) }) else { return nil }
         let names = zip(groupTabs, states).filter { $0.1 == state }.map(\.0.name)
-        return groupTabs.count < 2 || state == "idle" ? state : state + " · " + names.joined(separator: ", ")
+        return groupTabs.count < 2 || state == "idle" ? state : state + ": " + names.joined(separator: ", ")
     }
 
     private func agents(_ groupTabs: [Tab]) -> String? {
@@ -2116,11 +2401,41 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func activity(_ groupTabs: [Tab]) -> Activity? {
         let claudes = groupTabs.compactMap { tab in tab.claude.map { (tab: tab, state: $0) } }
         guard !claudes.isEmpty else { return nil }
-        let line = claudes.compactMap { tab, state in state == "idle" ? nil : tab.action.map { (who: tab.title, what: state == "waiting" ? $0.ask ?? $0.text : $0.text, ask: state == "waiting", at: $0.at) } }
-            .filter { !$0.what.isEmpty }.max { ($0.ask ? 1 : 0, $0.ask ? $1.at : $0.at) < ($1.ask ? 1 : 0, $1.ask ? $0.at : $1.at) }
-        let done = line == nil ? claudes.filter { $0.state == "idle" }.compactMap { tab, _ in reply(tab).map { (who: tab.title, what: $0.text, at: $0.at) } }.max { $0.at < $1.at } : nil
-        return Activity(sparks: claudes.map { .init(name: $0.tab.name, title: $0.tab.title, state: $0.state, mark: $0.tab.mark) }, who: line?.who ?? done?.who ?? "", what: line?.what ?? done?.what ?? "", ask: line?.ask ?? false,
-                        ago: done.map { Self.ago($0.at) } ?? "", agents: agents(groupTabs))
+        let line = claudes.compactMap { tab, state -> (name: String, who: String, what: String, ask: Bool, at: Date, ago: String)? in
+            if state == "background", let shell = tab.tasks.filter({ $0[0] == "shell" }).max(by: { Double($0[2]) ?? 0 < Double($1[2]) ?? 0 }) {
+                let start = Date(timeIntervalSince1970: Double(shell[2]) ?? 0)
+                return (tab.name, tab.title, "Waiting on " + shell[3], false, start, Self.ago(start))
+            }
+            return state == "idle" || state == "asleep" ? nil : tab.action.map { (tab.name, tab.title, state == "waiting" ? $0.ask ?? $0.text : $0.text == "Thinking" ? verb(tab, $0.at) : $0.text, state == "waiting", $0.at, "") }
+        }.filter { !$0.what.isEmpty }.max { ($0.ask ? 1 : 0, $0.ask ? $1.at : $0.at) < ($1.ask ? 1 : 0, $1.ask ? $0.at : $1.at) }
+        let done = line == nil ? claudes.filter { $0.state == "idle" }.compactMap { tab, _ in reply(tab).map { (name: tab.name, who: tab.title, what: $0.text, at: $0.at) } }.max { $0.at < $1.at } : nil
+        lazy var store = Self.warmStore()
+        return Activity(sparks: claudes.map { .init(name: $0.tab.name, title: $0.tab.title, state: $0.state, mark: $0.tab.mark, cold: cold($0.tab, store)) }, name: line?.name ?? done?.name ?? "", who: line?.who ?? done?.who ?? "", what: line?.what ?? done?.what ?? "", ask: line?.ask ?? false,
+                        ago: line?.ago ?? done.map { Self.ago($0.at) } ?? "", agents: agents(groupTabs))
+    }
+
+    private func verb(_ tab: Tab, _ at: Date) -> String {
+        if let cached = verbs[tab.name], cached.at == at { return (cached.verb ?? "Thinking") + "…" }
+        let screen = String(decoding: Self.zmxOutput("history", tab.name) ?? Data(), as: UTF8.self).split(separator: "\n").suffix(12)
+        let verb = screen.reversed().lazy.compactMap { $0.firstMatch(of: #/^\S ([\p{L} ]+)… \(/#)?.1 }.first.map(String.init)
+        verbs[tab.name] = (at, verb)
+        if verb == nil, tails[tab.name] == nil {
+            let tail = Process(), pipe = Pipe()
+            tail.executableURL = URL(fileURLWithPath: zmx)
+            tail.arguments = ["tail", tab.name]
+            tail.standardOutput = pipe
+            pipe.fileHandleForReading.readabilityHandler = { [unowned self] handle in
+                handle.readabilityHandler = nil
+                DispatchQueue.main.async { [unowned self] in
+                    tails.removeValue(forKey: tab.name)?.terminate()
+                    guard verbs[tab.name]?.at == at else { return }
+                    verbs[tab.name] = nil
+                    redraw(tab.group)
+                }
+            }
+            if (try? tail.run()) != nil { tails[tab.name] = tail }
+        }
+        return (verb ?? "Thinking") + "…"
     }
 
     private func reply(_ tab: Tab) -> (text: String, at: Date)? {
@@ -2147,6 +2462,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [unowned self] in
             statusPending = false
             statusChanged()
+            resumeUpdatedClaude()
+            tabs.map(\.name).forEach(nap)
         }
     }
     private var statusPending = false
@@ -2168,10 +2485,12 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var front: [String] { tabs.map { ($0.claude == nil ? "" : "✻ ") + $0.folder } + groups + groups.filter(shown) }
 
     private func redraw(_ group: String) {
-        activity(tabs.filter { $0.group == group }).map { activities[group]?.show($0) }
+        let activity = activity(tabs.filter { $0.group == group })
+        activity.map { activities[group]?.show($0) }
         for tab in tabs where tab.group == group {
             tabSparks[tab.name]?.kind = tab.claude ?? ""
             tabSparks[tab.name]?.mark = tab.mark
+            tabSparks[tab.name]?.cold = activity?.sparks.first { $0.name == tab.name }?.cold ?? false
         }
     }
 
@@ -2188,6 +2507,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             watch.setEventHandler { [unowned self] in
                 tabs.first { $0.name == name }.map { redraw($0.group) }
                 animate()
+                nap(name)
             }
             watch.setCancelHandler { Darwin.close(file) }
             watch.resume()
@@ -2196,7 +2516,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private func animate() {
-        let live = Spark.style == "simple" && drawing && (sidebarShown && activities.values.contains { $0.working } || tabSparks.values.contains { $0.kind == "working" })
+        let live = Spark.style == "simple" && drawing && (sidebarShown && activities.values.contains { $0.moving } || tabSparks.values.contains { $0.moving })
         guard live != (spinner != nil) else { return }
         spinner?.invalidate()
         spinner = live ? Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [unowned self] _ in
@@ -2244,11 +2564,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         for name in notices.keys { notices[name]?.bannered = true }
         lastBanner = Date()
-        let title = tabs.first { $0.name == newest.key }?.title ?? newest.key
-        let sound = UserDefaults.standard.string(forKey: Self.soundKey) ?? "Glass"
+        post(tabs.first { $0.name == newest.key }?.title ?? newest.key, newest.value.text, tab: newest.key)
+    }
+
+    private func post(_ title: String, _ text: String, tab: String? = nil) {
+        let sound = tab == nil ? "" : UserDefaults.standard.string(forKey: Self.soundKey) ?? "Glass"
         if let probe {
             let posted = (try? String(contentsOfFile: probe + "/banner", encoding: .utf8)) ?? ""
-            try? (posted + title + "\t" + newest.value.text + "\t" + sound + "\n").write(toFile: probe + "/banner", atomically: true, encoding: .utf8)
+            try? (posted + title + "\t" + text + "\t" + sound + "\n").write(toFile: probe + "/banner", atomically: true, encoding: .utf8)
             return
         }
         NSSound(named: sound)?.play()
@@ -2258,9 +2581,9 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             guard granted else { return }
             let content = UNMutableNotificationContent()
             content.title = title
-            content.body = newest.value.text
-            content.userInfo = ["tab": newest.key]
-            center.add(UNNotificationRequest(identifier: newest.key, content: content, trigger: nil))
+            content.body = text
+            content.userInfo = tab.map { ["tab": $0] } ?? [:]
+            center.add(UNNotificationRequest(identifier: tab ?? "update", content: content, trigger: nil))
         }
     }
 
@@ -2316,6 +2639,114 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         if probe == nil, Bundle.main.bundleIdentifier != nil, !names.isEmpty { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: names) }
     }
 
+    @objc private func sleepTab(_ item: NSMenuItem) { sleep(item.representedObject as! String) }
+
+    private func nap(_ name: String) {
+        let tab = tabs.first { $0.name == name }
+        if tab?.claude == "working" { woken[name] = nil }
+        guard let tab, !UserDefaults.standard.bool(forKey: Self.wakeKey), !placed.isEmpty, !placed.contains(name), tab.claude == "idle", tab.tasks.isEmpty,
+              let due = woken[name].map({ $0 + 5 * minute }) ?? tab.transcript.flatMap({ (try? FileManager.default.attributesOfItem(atPath: $0))?[.modificationDate] as? Date }).map({ $0 + 20 * minute }) else {
+            naps.removeValue(forKey: name)?.invalidate()
+            return
+        }
+        guard due > Date() else {
+            naps[name] = nil
+            if emptyPrompt(name) { sleep(name) }
+            return
+        }
+        guard naps[name]?.fireDate != due else { return }
+        naps[name]?.invalidate()
+        naps[name] = Timer(fire: due, interval: 0, repeats: false) { [unowned self] _ in nap(name) }
+        RunLoop.main.add(naps[name]!, forMode: .common)
+    }
+    private var naps: [String: Timer] = [:]
+    private var woken: [String: Date] = [:]
+
+    private func sleep(_ name: String) {
+        guard let index = tabs.firstIndex(where: { $0.name == name }), let session = tabs[index].session, let front = tabs[index].pid.flatMap(foreground) else { return }
+        let tab = tabs[index], words = Self.arguments(front)
+        woken[name] = nil
+        commands[tab.name] = Self.claude(Self.flags(words) + " --resume " + Self.quoted(session), program: Self.quoted(words[0]))
+        let peer = (try? Data(contentsOf: URL(fileURLWithPath: NSHomeDirectory() + "/.claude/sessions/\(front).json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["name"] as? String
+        let freed = tab.pid.map(Self.footprint) ?? 0
+        tabs[index] = Tab(name: tab.name, group: tab.group, cwd: tab.folder, labels: tab.labels.merging(["sleep": peer ?? "1", "freed": "\(freed)"]) { $1 })
+        try? "asleep".write(toFile: statusDir + "/" + tab.name, atomically: true, encoding: .utf8)
+        Self.end(tab.name, shell: tab.pid)
+        surfaces.removeValue(forKey: tab.name)?.removeFromSuperview()
+        rebuild()
+        saveSoon()
+        warm(name)
+    }
+
+    private func warm(_ name: String) {
+        warms.removeValue(forKey: name)?.invalidate()
+        let store = Self.warmStore(), hours = UserDefaults.standard.double(forKey: Self.warmKey)
+        let slept = (try? FileManager.default.attributesOfItem(atPath: statusDir + "/" + name))?[.modificationDate] as? Date
+        guard let tab = tabs.first(where: { $0.name == name }), tab.labels["sleep"] != nil, let session = tab.session,
+              let deadline = store["deadline:" + session].map({ Date(timeIntervalSince1970: $0 / 1000) }) ?? slept.flatMap({ hours > 0 ? $0 + hours * 60 * minute : nil }) else { return }
+        let last = warmed(tab, session, store), due = last + 49 * minute
+        guard last + 60 * minute > Date(), due < deadline else { return }
+        warms[name] = Timer(fire: max(due, Date()), interval: 0, repeats: false) { [unowned self] _ in
+            warms[name] = nil
+            guard let tab = tabs.first(where: { $0.name == name }), tab.labels["sleep"] != nil, tab.session == session else { return }
+            ping(tab, session)
+        }
+        RunLoop.main.add(warms[name]!, forMode: .common)
+    }
+    private let minute = probe == nil ? 60.0 : 0.1
+
+    private func warmed(_ tab: Tab, _ session: String, _ store: [String: Double]) -> Date {
+        let message = (tab.reply?["timestamp"] as? String).flatMap(stamps.date) ?? .distantPast
+        return [store["last:" + session].map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast, message, warmedAt[tab.name] ?? .distantPast].max()!
+    }
+
+    private func cold(_ tab: Tab, _ store: [String: Double]) -> Bool {
+        guard ["idle", "asleep"].contains(tab.claude), let session = tab.session else { return false }
+        let written = ((tab.reply?["message"] as? [String: Any])?["usage"] as? [String: Any])?["cache_creation"] as? [String: Int] ?? [:]
+        let lifetime = written["ephemeral_5m_input_tokens", default: 0] > 0 && written["ephemeral_1h_input_tokens", default: 0] == 0 ? 5.0 : 60
+        return warmed(tab, session, store) + lifetime * minute < Date()
+    }
+    private var warms: [String: Timer] = [:]
+    private var warmedAt: [String: Date] = [:]
+
+    private func ping(_ tab: Tab, _ session: String) {
+        let reply = tab.reply, message = reply?["message"] as? [String: Any], model = message?["model"] as? String, effort = reply?["effort"] as? String
+        let prefix = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].reduce(0) { $0 + ((message?["usage"] as? [String: Any])?[$1] as? Int ?? 0) }
+        let args = ["-p", "--resume", session, "--fork-session", "--no-session-persistence", "--max-turns", "1", "--settings", #"{"disableAllHooks":true}"#, "--output-format", "json"]
+            + (model.map { ["--model", $0] } ?? []) + (effort.map { ["--effort", $0] } ?? []) + ["Reply with the single word: warm"]
+        let process = Process(), output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lic", "exec env BUN_OPTIONS=--smol claude \"$@\" </dev/null", "zsh"] + args
+        process.currentDirectoryURL = URL(fileURLWithPath: reply?["cwd"] as? String ?? tab.folder)
+        process.environment = ProcessInfo.processInfo.environment.filter { !["CLAUDE_PID", "CLAUDE_CODE_CHILD_SESSION", "ZMX_SESSION"].contains($0.key) }
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { _ in
+            let usage = ((try? JSONSerialization.jsonObject(with: output.fileHandleForReading.readDataToEndOfFile())) as? [String: Any])?["usage"] as? [String: Any]
+            let read = usage?["cache_read_input_tokens"] as? Int ?? 0
+            DispatchQueue.main.async { [unowned self] in
+                let ok = prefix > 0 && Double(read) >= 0.9 * Double(prefix)
+                let line = "\(stamps.string(from: Date())) \(tab.name) \(session) \(model ?? "default") \(effort ?? "") read \(read) of \(prefix) \(ok ? "warm" : "failed")\n"
+                if let log = FileHandle(forWritingAtPath: Self.warmLog) ?? (FileManager.default.createFile(atPath: Self.warmLog, contents: nil) ? FileHandle(forWritingAtPath: Self.warmLog) : nil) {
+                    log.seekToEndOfFile()
+                    log.write(Data(line.utf8))
+                    try? log.close()
+                }
+                guard ok else { return }
+                warmedAt[tab.name] = Date()
+                saveSoon()
+                warm(tab.name)
+            }
+        }
+        try? process.run()
+    }
+    static let warmLog = (statusDir as NSString).deletingLastPathComponent + "/warm.log"
+
+    private static func warmStore() -> [String: Double] {
+        var store: [String: Double] = [:]
+        return store
+    }
+
     @objc private func mute(_ item: NSMenuItem) {
         let tab = item.representedObject as! Tab
         label(tab.group, "notify", tab.labels["notify"] == "0" ? "" : "0", tab: tab.name)
@@ -2324,13 +2755,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func agentsMenu(_ groupTabs: [Tab]) -> NSMenu {
         let menu = NSMenu()
         let clock = Date.FormatStyle(date: .omitted, time: .shortened)
-        let short = { (text: String) in text.count > 60 ? text.prefix(59).trimmingCharacters(in: .whitespaces) + "…" : text }
         let item = { [unowned self] (title: String, task: [String], tab: Tab, detail: String) in
-            let item = menu.addItem(withTitle: short(title), action: #selector(openTask), keyEquivalent: "")
-            item.target = self
-            item.representedObject = (tab.name, task)
+            let item = add(menu, Self.cap(title, 60), #selector(openTask), (tab.name, task))
             item.toolTip = title
-            item.subtitle = [Date(timeIntervalSince1970: Double(task[2]) ?? 0).formatted(clock), short(detail)].filter { !$0.isEmpty }.joined(separator: " · ")
+            item.subtitle = [Date(timeIntervalSince1970: Double(task[2]) ?? 0).formatted(clock), Self.cap(detail, 60)].filter { !$0.isEmpty }.joined(separator: "  ")
         }
         var shells: [(Tab, [String])] = []
         for tab in groupTabs {
@@ -2338,11 +2766,19 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             shells += tasks.filter { $0[0] == "shell" }.map { (tab, $0) }
             let agents = tasks.filter { $0[0] == "agent" }
             guard !agents.isEmpty else { continue }
-            menu.addItem(.sectionHeader(title: [tab.name, tab.context.map(Self.tokens)].compactMap { $0 }.joined(separator: " · ")))
+            menu.addItem(.sectionHeader(title: [tab.name, tab.context.map(Self.tokens)].compactMap { $0 }.joined(separator: "  ")))
             for agent in agents {
-                let meta = Self.meta(agent)
-                let quiet = (try? FileManager.default.attributesOfItem(atPath: agent[3])[.modificationDate] as? Date).map { -$0.timeIntervalSinceNow } ?? 0
-                item([meta["agentType"] as? String, meta["description"] as? String ?? agent[1]].compactMap { $0 }.joined(separator: "  "), agent, tab, quiet < 60 ? "active" : "quiet \(Int(quiet / 60)) min")
+                let meta = Self.meta(agent), rows = lastMessages(agent[3]), finished = meta["finished"] as? Bool == true
+                let reply = rows.first { (($0["message"] as? [String: Any])?["model"] as? String)?.hasPrefix("claude") == true }, message = reply?["message"] as? [String: Any]
+                let usage = message?["usage"] as? [String: Any]
+                let context = usage.map { usage in ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].reduce(0) { $0 + (usage[$1] as? Int ?? 0) } }
+                let tool = rows.lazy.compactMap { (($0["message"] as? [String: Any])?["content"] as? [[String: Any]])?.last { $0["type"] as? String == "tool_use" }?["name"] as? String }.first
+                let stopped = tab.claude == "asleep" || tab.session.map { !agent[3].contains("/\($0)/") } == true
+                let moved = (try? FileManager.default.attributesOfItem(atPath: agent[3])[.modificationDate] as? Date) ?? Date()
+                let state = finished ? "done" : stopped ? "stopped" : moved.timeIntervalSinceNow > -60 ? "active" : "quiet " + Self.ago(moved)
+                let model = [(message?["model"] as? String).map(Self.model), reply?["effort"] as? String].compactMap { $0 }.joined(separator: " ")
+                item([meta["agentType"] as? String, meta["description"] as? String ?? agent[1]].compactMap { $0 }.joined(separator: "  "), agent, tab,
+                     [model, context.map(Self.tokens) ?? "", finished || stopped ? "" : tool ?? "", state].filter { !$0.isEmpty }.joined(separator: "  "))
             }
         }
         if !shells.isEmpty {
@@ -2361,7 +2797,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             : ["sh", "-c", "f=$(ls /private/tmp/claude-$(id -u)/*/*/tasks/\"$0\".output 2>/dev/null | head -1); [ -n \"$f\" ] && exec tail -n +1 -F \"$f\"; echo No output yet.", task[1]]
         insertTab(name, in: pane, beside: tab, cwd: tab.folder)
         let index = tabs.firstIndex { $0.name == name }!
-        tabs[index].labels["title"] = Self.oneWord(task[0] == "agent" ? Self.meta(task)["agentType"] as? String ?? "agent" : "shell")
+        tabs[index].labels["title"] = task[0] == "agent" ? Self.meta(task)["agentType"] as? String ?? "agent" : "shell"
+        tabs[index].labels["viewer"] = "1"
         select(tabs[index])
     }
     private static let transcriptView = #"""
@@ -2378,52 +2815,66 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         showWindow()
     }
 
+    private func item(_ title: String, _ action: Selector?, _ object: Any? = nil, key: String = "") -> NSMenuItem {
+        let item = title == "-" ? NSMenuItem.separator() : NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        item.representedObject = object
+        return item
+    }
+
+    @discardableResult private func add(_ menu: NSMenu, _ title: String, _ action: Selector?, _ object: Any? = nil, key: String = "") -> NSMenuItem {
+        let made = item(title, action, object, key: key)
+        menu.addItem(made)
+        return made
+    }
+
     private func groupMenu(_ group: String, pinned: Bool) -> NSMenu {
-        let menu = NSMenu()
-        let pin = menu.addItem(withTitle: pinned ? "Unpin Group" : "Pin Group", action: #selector(setLabel), keyEquivalent: "")
-        pin.target = self
-        pin.representedObject = ([group], "pinned", pinned ? "" : "1")
-        let rename = menu.addItem(withTitle: "Rename Group", action: #selector(renameGroup), keyEquivalent: "R")
-        rename.target = self
-        rename.representedObject = group
+        let menu = NSMenu(), groupTabs = tabs.filter { $0.group == group }
+        let freed = Self.freed(groupTabs)
+        let saved = freed > 0 ? ", " + ByteCountFormatter.string(fromByteCount: freed, countStyle: .memory) + " saved" : ""
+        menu.addItem(.sectionHeader(title: (groupTabs.count == 1 ? "1 tab" : "\(groupTabs.count) tabs") + saved))
+        let sorting = UserDefaults.standard.bool(forKey: Self.sortKey)
+        let rows = { [unowned self] (rowTabs: ArraySlice<Tab>, into: NSMenu) in
+            for tab in rowTabs {
+                let row = add(into, Self.cap(tab.title, 48), #selector(pickTab), tab.name)
+                if let info = Self.brief(tab) { row.view = InfoRow(row.title, info: info, inset: sorting ? 30 : 16) }
+            }
+        }
+        rows(groupTabs.prefix(15), menu)
+        if groupTabs.count > 15 {
+            let more = NSMenu()
+            rows(groupTabs.dropFirst(15), more)
+            menu.addItem(withTitle: "\(groupTabs.count - 15) More", action: nil, keyEquivalent: "").submenu = more
+        }
+        menu.addItem(.separator())
+        add(menu, pinned ? "Unpin Group" : "Pin Group", #selector(setLabel), ([group], "pinned", pinned ? "" : "1"))
+        add(menu, "Rename Group", #selector(renameGroup), group, key: "R")
         folderMenu(menu, [group])
         menu.addItem(.separator())
-        let sorting = UserDefaults.standard.bool(forKey: Self.sortKey)
-        addColors(menu, [group], current: tabs.first { $0.group == group }?.labels["color"], inset: sorting ? 27 : 13)
+        addColors(menu, [group], current: groupTabs.first?.labels["color"], inset: sorting ? 27 : 13)
         menu.addItem(.separator())
         let order = peers(group)
         let index = order.firstIndex(of: group)!
         for (title, to) in [("Move Up", index - 1), ("Move Down", index + 1), ("Move to Top", 0)] {
-            let item = menu.addItem(withTitle: title, action: sorting || to == index || !order.indices.contains(to) ? nil : #selector(move), keyEquivalent: "")
-            item.target = self
-            item.representedObject = (group, to)
+            add(menu, title, sorting || to == index || !order.indices.contains(to) ? nil : #selector(move), (group, to))
         }
-        let sort = menu.addItem(withTitle: "Sort by State", action: #selector(toggleSort), keyEquivalent: "")
-        sort.target = self
-        sort.state = sorting ? .on : .off
+        add(menu, "Sort by State", #selector(toggleSort)).state = sorting ? .on : .off
         let others = tabs.contains { $0.group != group && $0.labels["pinned"] == nil }
         for (title, action) in [("-", nil), ("Show in Finder", #selector(showInFinder)), ("-", nil), ("Close Group", #selector(closeGroup)), ("Close Other Groups", others ? #selector(closeOthers) : nil)] {
-            let item = title == "-" ? NSMenuItem.separator() : NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.representedObject = group
-            menu.addItem(item)
+            add(menu, title, action, group)
         }
         return menu
     }
 
     private func pickedMenu() -> NSMenu {
         let menu = NSMenu(), chosen = groups.filter(picked.contains), pinned = chosen.allSatisfy { group in tabs.first { $0.group == group }?.labels["pinned"] != nil }
-        let pin = menu.addItem(withTitle: pinned ? "Unpin Groups" : "Pin Groups", action: #selector(setLabel), keyEquivalent: "")
-        pin.target = self
-        pin.representedObject = (chosen, "pinned", pinned ? "" : "1")
+        add(menu, pinned ? "Unpin Groups" : "Pin Groups", #selector(setLabel), (chosen, "pinned", pinned ? "" : "1"))
         folderMenu(menu, chosen)
         menu.addItem(.separator())
         let colored = Set(chosen.map { group in tabs.first { $0.group == group }?.labels["color"] })
         addColors(menu, chosen, current: colored.count == 1 ? colored.first! : nil, inset: UserDefaults.standard.bool(forKey: Self.sortKey) ? 27 : 13)
         menu.addItem(.separator())
-        let close = menu.addItem(withTitle: "Close \(chosen.count) Groups", action: #selector(closeGroups), keyEquivalent: "")
-        close.target = self
-        close.representedObject = chosen
+        add(menu, "Close \(chosen.count) Groups", #selector(closeGroups), chosen)
         return menu
     }
 
@@ -2432,9 +2883,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let folders = groups.compactMap(folder).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         let submenu = NSMenu()
         for (title, target) in folders.filter { $0 != shared }.map({ ($0, Optional($0)) }) + [("New Folder", nil)] + (homes == [nil] ? [] : [(shared.map { "Out of \($0)" } ?? "Out of Folders", Optional(""))]) {
-            let item = submenu.addItem(withTitle: title, action: #selector(moveToFolder), keyEquivalent: "")
-            item.target = self
-            item.representedObject = (chosen, target)
+            add(submenu, title, #selector(moveToFolder), (chosen, target))
         }
         menu.addItem(withTitle: "Move to Folder", action: nil, keyEquivalent: "").submenu = submenu
     }
@@ -2454,23 +2903,17 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         row.contextMenu = { [unowned self] in
             let menu = NSMenu()
             let key = "\t" + name, pinned = items.first { $0.key == key }?.pinned == true
-            let pin = menu.addItem(withTitle: pinned ? "Unpin Folder" : "Pin Folder", action: #selector(pinFolder), keyEquivalent: "")
-            pin.target = self
-            pin.representedObject = (name, pinned ? "" : "1")
+            add(menu, pinned ? "Unpin Folder" : "Pin Folder", #selector(pinFolder), (name, pinned ? "" : "1"))
             menu.addItem(.separator())
             addColors(menu, [key], current: tabs.first { $0.labels["folder"] == name }?.labels["foldercolor"], inset: 13)
             menu.addItem(.separator())
             let sorting = UserDefaults.standard.bool(forKey: Self.sortKey), order = peers(key), index = order.firstIndex(of: key)!
             for (title, to) in [("Move Up", index - 1), ("Move Down", index + 1), ("Move to Top", 0)] {
-                let item = menu.addItem(withTitle: title, action: sorting || to == index || !order.indices.contains(to) ? nil : #selector(move), keyEquivalent: "")
-                item.target = self
-                item.representedObject = (key, to)
+                add(menu, title, sorting || to == index || !order.indices.contains(to) ? nil : #selector(move), (key, to))
             }
             menu.addItem(.separator())
             for (title, action) in [("Rename Folder", #selector(renameFolder)), ("Remove Folder, Keep Groups", #selector(removeFolder))] {
-                let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
-                item.target = self
-                item.representedObject = name
+                add(menu, title, action, name)
             }
             return menu
         }
@@ -2517,11 +2960,11 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let taken = Set(tabs.compactMap { $0.labels["folder"] }).subtracting([name])
         renaming = true
         row.edit({ text in
-            let typed = Self.oneWord(text)
+            let typed = Self.trimmed(text)
             return typed.isEmpty ? "A folder needs a name." : taken.contains(typed) ? "Another folder is named \(typed)." : nil
         }) { [unowned self] text in
             renaming = false
-            if let typed = text.map(Self.oneWord), typed != name {
+            if let typed = text.map(Self.trimmed), typed != name {
                 for group in groups where folder(group) == name { label(group, "folder", typed) }
                 if collapsed.remove(name) != nil { collapsed.insert(typed) }
             }
@@ -2571,23 +3014,17 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         for (index, tab) in tabs.filter({ $0.group == group }).enumerated() where tab.labels["rank"] != String(index) { label(group, "rank", String(index), tab: tab.name) }
     }
 
-    private func tabMenu(_ tab: Tab, _ row: Row, _ paneTabs: [String], _ layout: Layout) -> NSMenu {
+    private func tabControls(_ tab: Tab) -> [NSMenuItem] {
+        [item("Rename Tab", #selector(renameTab), tab.name)] + (tab.labels["title"] == nil ? [] : [item("Remove Custom Tab Name", #selector(retitle), tab.name)])
+            + [item(tab.labels["notify"] == "0" ? "Unmute Notifications" : "Mute Notifications", #selector(mute), tab)]
+    }
+
+    private func tabMenu(_ tab: Tab, _ paneTabs: [String], _ layout: Layout) -> NSMenu {
         let menu = NSMenu()
-        let add = { (title: String, action: Selector?, object: Any?) in
-            let item = title == "-" ? NSMenuItem.separator() : NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.representedObject = object
-            menu.addItem(item)
-        }
-        add("Rename Tab", #selector(renameTab), (tab.name, row))
-        if tab.labels["title"] != nil { add("Remove Custom Tab Name", #selector(retitle), tab.name) }
-        add(tab.labels["notify"] == "0" ? "Unmute Notifications" : "Mute Notifications", #selector(mute), tab)
-        add("-", nil, nil)
-        add("Schedule Message…", #selector(schedule), tab)
-        for entry in scheduled where entry[0] == tab.name {
-            let time = Date(timeIntervalSince1970: Double(entry[1])!).formatted(date: .abbreviated, time: .shortened)
-            add("Cancel \u{201C}\(entry[2].count > 30 ? entry[2].prefix(29) + "…" : entry[2])\u{201D} (\(time))", #selector(unschedule), entry)
-        }
+        let add = { (title: String, action: Selector?, object: Any?) in self.add(menu, title, action, object) }
+        if let brief = Self.brief(tab) { menu.addItem(.sectionHeader(title: brief)) }
+        menu.items += tabControls(tab)
+        if tab.claude != nil { add("Sleep Tab", tab.claude == "idle" && tab.tasks.isEmpty && !shown.contains(tab.name) ? #selector(sleepTab) : nil, tab.name) }
         add("-", nil, nil)
         let index = paneTabs.firstIndex(of: tab.name)!
         let left = Array(paneTabs[..<index]), right = Array(paneTabs[(index + 1)...])
@@ -2608,6 +3045,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         return menu
     }
 
+    private func scheduleItems(_ tab: Tab) -> [NSMenuItem] {
+        let clock = Date.FormatStyle(date: .abbreviated, time: .shortened)
+        let lines = [("Schedule Message…", #selector(schedule), tab as Any)] + scheduled.filter { $0[0] == tab.name }.map { entry in
+            ("Cancel \u{201C}\(Self.cap(entry[2], 30))\u{201D} (\(Date(timeIntervalSince1970: Double(entry[1])!).formatted(clock)))", #selector(unschedule), entry as Any)
+        }
+        return lines.map { item($0, $1, $2) }
+    }
+
     private var scheduled: [[String]] {
         get { UserDefaults.standard.array(forKey: Self.scheduledKey) as? [[String]] ?? [] }
         set { UserDefaults.standard.set(newValue, forKey: Self.scheduledKey) }
@@ -2617,13 +3062,23 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let timer = Timer(fire: Date(timeIntervalSince1970: Double(entry[1])!), interval: 0, repeats: false) { [unowned self] _ in
             guard scheduled.contains(entry) else { return }
             scheduled.removeAll { $0 == entry }
-            let text = Process()
-            text.executableURL = URL(fileURLWithPath: zmx)
-            text.arguments = ["send", entry[0], entry[2]]
-            text.terminationHandler = { _ in usleep(300_000); _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", entry[0], "\r"]) }
-            try? text.run()
+            type(entry[2], to: entry[0])
         }
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func type(_ text: String, to name: String) {
+        if let tab = tabs.first(where: { $0.name == name }), tab.labels["sleep"] != nil {
+            makeSurface(tab).setVisible(false)
+            return awake(name) { [unowned self] in type(text, to: name) }
+        }
+        _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", name, text]) { _ in usleep(300_000); _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", name, "\r"]) }
+    }
+
+    private func awake(_ name: String, tries: Int = 120, then: @escaping () -> Void) {
+        guard tries > 0, let tab = tabs.first(where: { $0.name == name }) else { return }
+        if tab.claude == "idle", emptyPrompt(name) { return then() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [unowned self] in awake(name, tries: tries - 1, then: then) }
     }
 
     @objc private func schedule(_ item: NSMenuItem) {
@@ -2654,8 +3109,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     @objc private func renameTab(_ item: NSMenuItem) {
-        let (name, row) = item.representedObject as! (String, Row)
-        rename(tab: name, in: row)
+        let name = item.representedObject as! String
+        tabRows[name].map { rename(tab: name, in: $0) }
     }
 
     private func rename(tab name: String, in row: Row) {
@@ -2663,8 +3118,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         row.edit({ _ in nil }) { [unowned self] text in
             renaming = false
             if let text, let tab = tabs.first(where: { $0.name == name }) {
-                let title = Self.oneWord(text)
-                if !label(tab.group, "title", title == name ? "" : title, tab: name) { NSSound.beep() }
+                let title = Self.trimmed(text)
+                if !label(tab.group, "title", title, tab: name) { NSSound.beep() }
             }
             rebuild()
             window.makeFirstResponder(selected.flatMap { surfaces[$0.name] })
@@ -2700,14 +3155,16 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             return true
         }
         guard under(scroll) else { return false }
-        if let group = groupRows.first(where: { under($0.value) })?.key { return group != tab.group && regroup(name, to: group) }
-        guard tabs.contains(where: { $0.group == tab.group && $0 != tab }) else { return false }
-        return regroup(name, to: Self.unused(name, takenNames().subtracting([name]).union(groups)))
+        let group = groupRows.first { under($0.value) }?.key
+            ?? (tabs.contains { $0.group == tab.group && $0 != tab } ? Self.unused(name, takenNames().subtracting([name]).union(groups)) : nil)
+        guard let group, group != tab.group, regroup(name, to: group) else { return false }
+        select(tabs.first { $0 == tab }!)
+        return true
     }
 
-    private func regroup(_ name: String, to group: String) -> Bool {
+    private func regroup(_ name: String, to group: String, named: String = "0") -> Bool {
         let tab = tabs.first { $0.name == name }!, source = tab.group, target = tabs.first { $0.group == group }
-        var wanted = (target?.labels ?? ["named": "0"]).filter { ["color", "pinned", "order", "split", "named", "folder", "folderpinned", "folderorder", "foldercolor"].contains($0.key) }
+        var wanted = (target?.labels ?? ["named": named]).filter { ["color", "pinned", "order", "split", "named", "folder", "folderpinned", "folderorder", "foldercolor"].contains($0.key) }
         wanted["pane"] = target.map { pane(of: tabs.first { $0 == lastTab[group] } ?? $0) }
         wanted["title"] = tab.labels["title"]
         guard label(source, "group", group, tab: name) else { NSSound.beep(); return false }
@@ -2717,7 +3174,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         if let next = tabs.firstIndex(where: { $0.group == source }), next > index { tabs.insert(tabs.remove(at: next), at: index) }
         tabs.insert(moved, at: (tabs.lastIndex { $0.group == group } ?? tabs.count - 1) + 1)
         lastTab = lastTab.filter { $0.value.name != name }
-        select(moved)
+        selected = selected.flatMap { old in tabs.first { $0 == old } }
         return true
     }
 
@@ -2786,18 +3243,41 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @discardableResult private func label(_ group: String, _ key: String, _ value: String, tab: String? = nil) -> Bool {
         var all = true
         for index in tabs.indices where tabs[index].group == group && (tab == nil || tabs[index].name == tab) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: zmx)
-            process.arguments = ["set", tabs[index].name, key + "=" + value]
-            guard let done = Self.launch(process) else { all = false; continue }
-            done.wait()
-            guard process.terminationStatus == 0 else { all = false; continue }
+            if tabs[index].labels["sleep"] == nil {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: zmx)
+                process.arguments = ["set", tabs[index].name, key + "=" + Self.encoded(value)]
+                guard let done = Self.launch(process) else { all = false; continue }
+                done.wait()
+                guard process.terminationStatus == 0 else { all = false; continue }
+            }
             if key == "group" { tabs[index].group = value } else { tabs[index].labels[key] = value.isEmpty ? nil : value }
         }
         return all
     }
 
-    private static func oneWord(_ text: String) -> String { text.split { $0.isWhitespace || $0 == "=" }.joined(separator: "-") }
+    private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private static func encoded(_ value: String) -> String {
+        value.utf8.map { byte in
+            let char = Character(UnicodeScalar(byte))
+            return byte < 128 && (char.isLetter || char.isNumber || char == "-" || char == ".") ? String(char) : String(format: "_%02X", byte)
+        }.joined()
+    }
+
+    private static func decoded(_ value: String) -> String {
+        var bytes: [UInt8] = [], rest = Substring(value)
+        while let char = rest.first {
+            if char == "_", rest.count >= 3, let byte = UInt8(rest.dropFirst().prefix(2), radix: 16) {
+                bytes.append(byte)
+                rest = rest.dropFirst(3)
+            } else {
+                bytes += Array(String(char).utf8)
+                rest = rest.dropFirst()
+            }
+        }
+        return String(validating: bytes, as: UTF8.self) ?? value
+    }
 
     @objc private func renameGroup(_ item: NSMenuItem) { rename(item.representedObject as! String) }
 
@@ -2809,15 +3289,19 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
 
     private func rename(_ group: String) {
         guard let row = groupRows[group] else { return }
-        let shown = title(group)
         renaming = true
         row.edit({ [unowned self] text in
-            let name = Self.oneWord(text)
+            let name = Self.trimmed(text)
             return name.isEmpty ? "A group needs a name." : name != group && groups.contains(name) ? "Another group is named \(name)." : nil
         }) { [unowned self] text in
             renaming = false
-            if let name = text.map(Self.oneWord), text != shown, name != group {
-                if !label(group, "group", name) { label(name, "group", group) } else { label(name, "named", "1") }
+            if let name = text.map(Self.trimmed) {
+                if label(group, "group", name) {
+                    label(name, "named", "1")
+                } else {
+                    label(name, "group", group)
+                    NSSound.beep()
+                }
                 selected = selected.flatMap { old in tabs.first { $0.name == old.name } }
                 lastTab = Dictionary(lastTab.values.compactMap { old in tabs.first { $0.name == old.name } }.map { ($0.group, $0) }, uniquingKeysWith: { first, _ in first })
             }
@@ -2841,15 +3325,15 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private func closing(_ names: [String], title: String = "Close tab?", ask: Bool = false) {
-        let sessions = Self.list().filter { names.contains($0["name"] ?? "") && $0["pid"] != nil }
+        let sessions = Self.list().filter { names.contains($0["name"] ?? "") }
         let end = { [unowned self] in
             closedTabs = Array((closedTabs + sessions.compactMap(closedTab)).suffix(10))
-            for session in sessions { _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["kill", session["name"]!]) }
-            names.sorted { _, last in last == selected?.name }.forEach(closed)
+            for session in sessions { Self.end(session["name"]!, shell: session["pid"].flatMap(Int32.init)) }
+            closed(names)
         }
         let doomed = names.compactMap { name in sessions.first { $0["name"] == name } }.compactMap { session -> (tab: String, jobs: [Job])? in
             let tab = tabs.first { $0.name == session["name"] }
-            let jobs = Self.jobs(session, tab)
+            let jobs = tab?.labels["viewer"] != nil ? [] : Self.jobs(session, tab)
             return jobs.isEmpty ? nil : (tab?.title ?? session["name"]!, jobs)
         }
         guard !doomed.isEmpty || ask else { return end() }
@@ -2860,15 +3344,17 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let alert = NSAlert()
         alert.messageText = message
         alert.accessoryView = accessory
-        for (title, key) in [(action, "↩"), ("Cancel", "⎋")] {
-            let button = alert.addButton(withTitle: title)
-            let color = key == "↩" ? NSColor.alternateSelectedControlTextColor : .controlTextColor
-            let label = NSMutableAttributedString(string: title + "  ", attributes: [.font: button.font!, .foregroundColor: color])
-            label.append(NSAttributedString(string: key, attributes: [.font: button.font!, .foregroundColor: color.withAlphaComponent(0.55)]))
-            button.attributedTitle = label
-        }
+        for (title, key) in [(action, "↩"), ("Cancel", "⎋")] { Self.keyed(alert.addButton(withTitle: title), key) }
         alert.buttons[1].keyEquivalent = "\u{1b}"
         alert.beginSheetModal(for: window) { then($0 == .alertFirstButtonReturn) }
+    }
+
+    static func keyed(_ button: NSButton, _ key: String) {
+        button.setAccessibilityLabel(button.title)
+        let color = key == "↩" ? NSColor.alternateSelectedControlTextColor : .controlTextColor
+        let label = NSMutableAttributedString(string: button.title + "  ", attributes: [.font: button.font!, .foregroundColor: color])
+        label.append(NSAttributedString(string: key, attributes: [.font: button.font!, .foregroundColor: color.withAlphaComponent(0.55)]))
+        button.attributedTitle = label
     }
 
     private func closing(group: String) {
@@ -2884,15 +3370,34 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let kept = Tab(name: name, group: tab.group, cwd: tab.folder, labels: tab.labels)
         if tab.claude != nil, let session = tab.session, let front = tab.pid.flatMap(foreground) { return (kept, index, Self.claude(Self.flags(Self.arguments(front)) + " --resume " + session), nil) }
         if tab.labels["replay"] == nil, let command = commands[name] { return (kept, index, command, nil) }
+        guard let history = Self.zmxOutput("history", name, "--vt") else { return (kept, index, nil, nil) }
+        return (kept, index, nil, history.lastIndex(of: 10).map { history.prefix(through: $0) })
+    }
+
+    private static func zmxOutput(_ arguments: String...) -> Data? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: zmx)
-        process.arguments = ["history", name, "--vt"]
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
-        guard let done = Self.launch(process) else { return (kept, index, nil, nil) }
-        let history = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let done = Self.launch(process) else { return nil }
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
         done.wait()
-        return (kept, index, nil, history.lastIndex(of: 10).map { history.prefix(through: $0) })
+        return output
+    }
+
+    private func emptyPrompt(_ name: String) -> Bool { Self.prompt(name) == "" }
+
+    private static func prompt(_ name: String) -> String? {
+        let lines = String(decoding: zmxOutput("history", name, "--vt") ?? Data(), as: UTF8.self)
+            .replacingOccurrences(of: "\u{1B}\\[2m(?:[^\u{1B}]|\u{1B}\\[(?!0m)[0-9;]*m)*", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[A-Za-z]|\r", with: "", options: .regularExpression)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+        let rules = lines.indices.filter { lines[$0].hasPrefix("────") }
+        guard rules.count >= 2 else { return nil }
+        let box = lines[rules[rules.count - 2] + 1 ..< rules[rules.count - 1]].map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard box.first?.hasPrefix("❯") == true else { return nil }
+        return ([box[0].dropFirst().trimmingCharacters(in: .whitespaces)] + box.dropFirst()).joined(separator: "\n").trimmingCharacters(in: .whitespaces)
     }
 
     private static func flags(_ argv: [String]) -> String {
@@ -2937,6 +3442,42 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         select(tab)
     }
+
+    private func resumeUpdatedClaude() {
+        guard Date() >= nextResume else { return }
+        let keyed = NSApp.isActive ? selected?.name : nil
+        for tab in tabs where tab.name != keyed && tab.claude == "idle" && tab.tasks.isEmpty {
+            guard let session = tab.session, let shell = tab.pid, let front = foreground(shell), let link = started(front)?.strings.first, FileManager.default.fileExists(atPath: link),
+                  URL(fileURLWithPath: link).resolvingSymlinksInPath() != URL(fileURLWithPath: binary(front)).resolvingSymlinksInPath(), emptyPrompt(tab.name) else { continue }
+            nextResume = Date() + 5
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [unowned self] in resumeUpdatedClaude() }
+            let words = Self.arguments(front), name = tab.name
+            let args = Self.flags(words) + " --resume " + Self.quoted(session)
+            guard front == shell else {
+                let exit = DispatchSource.makeProcessSource(identifier: front, eventMask: .exit, queue: .main)
+                exit.setEventHandler {
+                    exit.cancel()
+                    _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", name, Self.quoted(words[0]) + " " + args + "\r"])
+                }
+                exit.resume()
+                kill(front, SIGTERM)
+                return
+            }
+            tabs[tabs.firstIndex(of: tab)!] = Tab(name: name, group: tab.group, cwd: tab.folder, labels: tab.labels)
+            Self.end(name, shell: shell)
+            commands[name] = Self.claude(args, program: Self.quoted(words[0]))
+            let old = surfaces[name]
+            func attach(_ tries: Int) {
+                guard let tab = tabs.first(where: { $0.name == name }), surfaces[name] === old else { return }
+                if tries > 0, FileManager.default.fileExists(atPath: zmxDir + "/" + name) { return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { attach(tries - 1) } }
+                old?.removeFromSuperview()
+                makeSurface(tab).setVisible(false)
+                rebuild()
+            }
+            return attach(30)
+        }
+    }
+    private var nextResume = Date.distantPast
 
     private static func jobs(_ session: [String: String], _ tab: Tab?) -> [Job] {
         guard let shell = session["pid"].flatMap(Int32.init), let front = foreground(shell), let own = info(shell)?.pbi_pgid else { return [] }
@@ -3011,8 +3552,39 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         var process = kinfo_proc(), size = MemoryLayout<kinfo_proc>.size, mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         guard sysctl(&mib, 4, &process, &size, nil, 0) == 0, size > 0 else { return nil }
         (info.pbi_pid, info.pbi_ppid, info.pbi_pgid, info.pbi_start_tvsec) = (UInt32(pid), UInt32(process.kp_eproc.e_ppid), UInt32(process.kp_eproc.e_pgid), UInt64(process.kp_proc.p_starttime.tv_sec))
-        info.pbi_comm = withUnsafeBytes(of: process.kp_proc.p_comm) { $0.load(as: type(of: info.pbi_comm)) }
+        info.pbi_comm = withUnsafeBytes(of: process.kp_proc.p_comm) { $0.load(as: Swift.type(of: info.pbi_comm)) }
         return info
+    }
+
+    private static func end(_ name: String, shell: Int32?) {
+        let stuck = shell == nil ? zmxes(name) : []
+        var tree: [(pid: Int32, start: UInt64)] = [], next = shell.map { [$0] } ?? stuck
+        let front = shell.flatMap(foreground).map(UInt32.init)
+        while let pid = next.popLast() {
+            guard let found = info(pid) else { continue }
+            if found.pbi_pgid != front { tree.append((pid, found.pbi_start_tvsec)) }
+            next += children(pid)
+        }
+        if stuck.isEmpty { _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["kill", name]) }
+        let signal = { (number: Int32) in for process in tree where info(process.pid)?.pbi_start_tvsec == process.start { kill(process.pid, number) } }
+        signal(SIGTERM)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { signal(SIGKILL) }
+    }
+
+    private static func zmxes(_ name: String) -> [Int32] {
+        var pids = [Int32](repeating: 0, count: Int(max(proc_listallpids(nil, 0), 0)) + 64)
+        let found = Int(max(proc_listallpids(&pids, Int32(pids.count * 4)), 0))
+        return pids.prefix(found).filter { pid in
+            guard let (count, all) = started(pid), all.count > count, count > 2, (all[1] as NSString).lastPathComponent == "zmx", ["attach", "run"].contains(all[2]) else { return false }
+            let at = count > 4 && all[3] == "--labels" ? 5 : 3
+            return count > at - 1 && all[at] == name && all[(count + 1)...].first { $0.hasPrefix("ZMX_DIR=") } == ProcessInfo.processInfo.environment["ZMX_DIR"].map { "ZMX_DIR=" + $0 }
+        }
+    }
+
+    private static func footprint(_ pid: Int32) -> UInt64 {
+        var usage = rusage_info_v2()
+        let read = withUnsafeMutablePointer(to: &usage) { $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V2, $0) } }
+        return children(pid).reduce(read == 0 ? usage.ri_phys_footprint : 0) { $0 + footprint($1) }
     }
 
     private static func children(_ pid: Int32) -> [Int32] {
@@ -3041,19 +3613,21 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
 
     private func name(_ view: SurfaceView?) -> String? { surfaces.first { $0.value === view }?.key }
 
-    private func closed(_ name: String) {
-        guard let tab = tabs.first(where: { $0.name == name }) else { return }
-        clear(name)
-        scheduled.removeAll { $0[0] == name }
-        try? FileManager.default.removeItem(atPath: statusDir + "/" + name + ".topic")
+    private func closed(_ names: [String]) {
+        guard tabs.contains(where: { names.contains($0.name) }) else { return }
+        for name in names {
+            clear(name)
+            surfaces.removeValue(forKey: name)?.removeFromSuperview()
+            try? FileManager.default.removeItem(atPath: statusDir + "/" + name + ".topic")
+        }
+        scheduled.removeAll { names.contains($0[0]) }
         let index = groups.firstIndex(of: selected?.group ?? "") ?? 0
-        let pane = pane(of: tab)
-        surfaces.removeValue(forKey: name)?.removeFromSuperview()
-        tabs.removeAll { $0.name == name }
-        lastTab = lastTab.filter { $0.value.name != name }
-        shown.remove(name)
+        let pane = selected.map { pane(of: $0) }
+        tabs.removeAll { names.contains($0.name) }
+        lastTab = lastTab.filter { !names.contains($0.value.name) }
+        shown.subtract(names)
         guard !tabs.isEmpty else { return NSApp.terminate(nil) }
-        guard let group = selected?.group, selected?.name == name else { return rebuild() }
+        guard let group = selected?.group, let name = selected?.name, names.contains(name) else { return rebuild() }
         if let sibling = tabs.first(where: { $0.group == group && self.pane(of: $0) == pane }) { return select(sibling) }
         select(group: groups.contains(group) ? group : groups[min(index, groups.count - 1)])
     }
@@ -3061,7 +3635,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private static func sessions() -> [Tab] {
         let found = list().compactMap { fields -> (Int, Tab)? in
             guard let name = fields["name"], let group = fields["group"] else { return nil }
-            return (Int(fields["created"] ?? "") ?? 0, Tab(name: name, group: group, cwd: URL(string: fields["cwd"] ?? "")?.path ?? NSHomeDirectory(), labels: fields.filter { ["color", "pinned", "order", "split", "pane", "title", "rank", "notify", "named", "replay", "folder", "folderpinned", "folderorder", "foldercolor"].contains($0.key) }, pid: fields["pid"].flatMap(Int32.init), topic: try? String(contentsOfFile: statusDir + "/" + name + ".topic", encoding: .utf8)))
+            return (Int(fields["created"] ?? "") ?? 0, Tab(name: name, group: decoded(group), cwd: URL(string: fields["cwd"] ?? "")?.path ?? NSHomeDirectory(), labels: fields.filter { ["color", "pinned", "order", "split", "pane", "title", "rank", "notify", "named", "replay", "folder", "folderpinned", "folderorder", "foldercolor"].contains($0.key) }.mapValues(decoded), pid: fields["pid"].flatMap(Int32.init), topic: try? String(contentsOfFile: statusDir + "/" + name + ".topic", encoding: .utf8)))
         }.sorted { $0.0 < $1.0 }.map(\.1)
         let first = Dictionary(found.enumerated().map { ($1.group, $0) }, uniquingKeysWith: { first, _ in first })
         return found.map { (first[$0.group]!, Int($0.labels["rank"] ?? "") ?? .max, $0) }.sorted { ($0.0, $0.1) < ($1.0, $1.1) }.map(\.2)
@@ -3079,14 +3653,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     private static func list() -> [[String: String]] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: zmx)
-        process.arguments = ["list"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        guard let done = launch(process) else { return [] }
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        done.wait()
+        let output = String(decoding: zmxOutput("list") ?? Data(), as: UTF8.self)
         return output.split(separator: "\n").map { line in
             Dictionary(line.split(separator: "\t").compactMap { field -> (String, String)? in
                 let pair = field.trimmingCharacters(in: .whitespaces.union(["→"])).split(separator: "=", maxSplits: 1)
@@ -3106,7 +3673,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         case GHOSTTY_ACTION_CELL_SIZE:
             let backing = NSSize(width: Double(action.action.cell_size.width), height: Double(action.action.cell_size.height))
             view?.cellSize = view?.convertFromBacking(backing) ?? .zero
-            if view != nil, view === selected.flatMap({ surfaces[$0.name] }) { snap() }
+            refit()
         case GHOSTTY_ACTION_OPEN_URL:
             open(String(decoding: UnsafeRawBufferPointer(start: action.action.open_url.url, count: Int(action.action.open_url.len)), as: UTF8.self), from: view)
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
@@ -3158,6 +3725,11 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 tabs[tabs.firstIndex(of: tab)!].topic = topic.isEmpty ? nil : topic
                 rebuild()
             }
+        case GHOSTTY_ACTION_COLOR_CHANGE:
+            let change = action.action.color_change
+            guard let view, change.kind == GHOSTTY_ACTION_COLOR_KIND_EDGE || change.kind == GHOSTTY_ACTION_COLOR_KIND_EDGE_DEFAULT else { return false }
+            view.edge = (NSColor(srgbRed: CGFloat(change.r) / 255, green: CGFloat(change.g) / 255, blue: CGFloat(change.b) / 255, alpha: 1), change.kind == GHOSTTY_ACTION_COLOR_KIND_EDGE)
+            edges()
         default:
             return false
         }
@@ -3185,9 +3757,17 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         if url == nil, link.wholeMatch(of: #/localhost(:\d+)?(\/.*)?/#) != nil { url = URL(string: "http://" + link) }
         url = url ?? Self.links.firstMatch(in: link, range: NSRange(link.startIndex..., in: link)).flatMap { $0.range.length == link.utf16.count ? $0.url : nil }
         guard var url else { return }
+        let script = (probe.map { $0 + "/config" } ?? NSHomeDirectory() + "/.config/claudetty") + "/open"
+        if FileManager.default.isExecutableFile(atPath: script) {
+            let arguments = [url.isFileURL ? url.path + (line.map { ":\($0.row):\($0.column)" } ?? "") : url.absoluteString, start.path]
+            if let probe { return try! (link + " → " + ([script] + arguments).joined(separator: " ")).write(toFile: probe + "/opened", atomically: true, encoding: .utf8) }
+            _ = try? Process.run(URL(fileURLWithPath: script), arguments: arguments)
+            return
+        }
         var xed: [String]?
         if let line, let app = NSWorkspace.shared.urlForApplication(toOpen: url) {
-            if Bundle(url: app)?.bundleIdentifier == "com.apple.dt.Xcode" { xed = ["--line", String(line.row), url.path] }
+            let opener = Bundle(url: app)?.bundleIdentifier
+            if opener == "com.apple.dt.Xcode" { xed = ["--line", String(line.row), url.path] }
             else if NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.microsoft.VSCode") != nil { url = URL(string: "vscode://file")!.appending(path: url.path + ":\(line.row):\(line.column)") }
         }
         if let probe { return try! (link + " → " + (xed.map { "xed " + $0.joined(separator: " ") } ?? url.absoluteString)).write(toFile: probe + "/opened", atomically: true, encoding: .utf8) }
@@ -3197,6 +3777,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             NSWorkspace.shared.open(url)
         }
     }
+    private static let mimes: [String: NSPasteboard.PasteboardType] = ["text/plain": .string, "text/html": .html, "image/png": .png]
     private static let links = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
     private static func pasteboard(_ location: ghostty_clipboard_e) -> NSPasteboard? {
@@ -3270,24 +3851,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         guard let pasteboard = pasteboard(location), let content else { return }
         let items = (0..<count).compactMap { index -> (NSPasteboard.PasteboardType, Data)? in
             let item = content[index]
-            guard let mime = item.mime.map({ String(cString: $0) }), let type = NSPasteboard.PasteboardType(mimeType: mime), let data = item.data else { return nil }
+            guard let mime = item.mime.map({ String(cString: $0) }), let type = Self.mimes[mime], let data = item.data else { return nil }
             return (type, Data(bytes: data, count: item.len))
         }
         guard !items.isEmpty else { return }
         pasteboard.declareTypes(items.map(\.0), owner: nil)
         for (type, data) in items {
             pasteboard.setData(data, forType: type)
-        }
-    }
-}
-
-extension NSPasteboard.PasteboardType {
-    init?(mimeType: String) {
-        switch mimeType {
-        case "text/plain": self = .string
-        case "text/html": self = .html
-        case "image/png": self = .png
-        default: return nil
         }
     }
 }
@@ -3319,9 +3889,8 @@ final class Body: NSView {
         fit()
     }
     func fit() {
-        let unsnapped = window.map { Self.unsnapped($0, $0.frame.size) } ?? false
         for case let view as SurfaceView in subviews {
-            let left = unsnapped && view.cellSize.height > 0 ? (bounds.height - ClaudeTTY.padding.height).truncatingRemainder(dividingBy: view.cellSize.height) : 0
+            let left = view.cellSize.height > 0 ? (bounds.height - ClaudeTTY.padding.height).truncatingRemainder(dividingBy: view.cellSize.height) : 0
             view.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height + (left > 0.5 ? view.cellSize.height - left : 0))
         }
     }
@@ -3360,7 +3929,7 @@ final class Ring: NSView {
 }
 
 final class SplitView: NSSplitView {
-    override var dividerColor: NSColor { NSColor(white: 1, alpha: 0.12) }
+    override var dividerColor: NSColor { ink(0.12) }
 }
 
 final class SidebarEdge: NSView {
@@ -3383,13 +3952,16 @@ final class BarIcon: NSImageView {
 final class TitleButton: NSButton {
     static let font = NSFont.systemFont(ofSize: 13, weight: .bold)
 
+    static let longest: CGFloat = 240
     private let box = CALayer()
+    lazy var nameCap = widthAnchor.constraint(lessThanOrEqualToConstant: Self.longest)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
         box.cornerRadius = 5
         layer?.addSublayer(box)
+        nameCap.isActive = true
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -3421,10 +3993,11 @@ extension CALayer {
 }
 
 final class Blank: NSView {
-    private let doubleClick: () -> Void, newFolder: () -> Void
-    init(newFolder: @escaping () -> Void, doubleClick: @escaping () -> Void) {
+    private let doubleClick: () -> Void, newFolder: () -> Void, freed: () -> Int64
+    init(newFolder: @escaping () -> Void, freed: @escaping () -> Int64, doubleClick: @escaping () -> Void) {
         self.doubleClick = doubleClick
         self.newFolder = newFolder
+        self.freed = freed
         super.init(frame: .zero)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -3434,6 +4007,11 @@ final class Blank: NSView {
         let menu = NSMenu()
         menu.addItem(withTitle: "New Group", action: #selector(newGroup), keyEquivalent: "n").target = self
         menu.addItem(withTitle: "New Folder", action: #selector(makeFolder), keyEquivalent: "").target = self
+        let freed = freed()
+        if freed > 0 {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "Memory saved: " + ByteCountFormatter.string(fromByteCount: freed, countStyle: .memory), action: nil, keyEquivalent: "")
+        }
         return menu
     }
     @objc private func newGroup() { doubleClick() }
@@ -3504,6 +4082,40 @@ final class KeyPill: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+final class InfoRow: NSView {
+    static let font = NSFont.menuFont(ofSize: 0)
+    let title: String, info: String, inset: CGFloat
+
+    init(_ title: String, info: String, inset: CGFloat) {
+        self.title = title
+        self.info = info
+        self.inset = inset
+        let width = { (text: String) in ceil((text as NSString).size(withAttributes: [.font: Self.font]).width) }
+        super.init(frame: NSRect(x: 0, y: 0, width: inset + width(title) + 20 + width(info) + 17, height: 24))
+        autoresizingMask = .width
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func draw(_ dirtyRect: NSRect) {
+        let lit = enclosingMenuItem?.isHighlighted == true
+        if lit {
+            NSColor.controlAccentColor.setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: 7, yRadius: 7).fill()
+        }
+        let size = (info as NSString).size(withAttributes: [.font: Self.font]), y = ((bounds.height - size.height) / 2).rounded()
+        (title as NSString).draw(at: NSPoint(x: inset, y: y), withAttributes: [.font: Self.font, .foregroundColor: lit ? NSColor.selectedMenuItemTextColor : .labelColor])
+        (info as NSString).draw(at: NSPoint(x: bounds.width - 17 - size.width, y: y), withAttributes: [.font: Self.font, .foregroundColor: lit ? NSColor.selectedMenuItemTextColor : .tertiaryLabelColor])
+    }
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { false }
+    override func keyDown(with event: NSEvent) { [36, 76, 49].contains(event.keyCode) ? pick() : super.keyDown(with: event) }
+    override func mouseUp(with event: NSEvent) { pick() }
+    private func pick() {
+        guard let item = enclosingMenuItem, let menu = item.menu else { return }
+        menu.cancelTracking()
+        menu.performActionForItem(at: menu.index(of: item))
+    }
+}
+
 struct Job {
     let name: String
     let detail: String
@@ -3511,7 +4123,75 @@ struct Job {
     var claudes = false
 }
 
-final class PaneBar: NSStackView {
+class TabStrip: NSStackView {
+    weak var stop: NSView?
+    let gap: CGFloat = 12
+    private let more = LinkButton(title: "", target: nil, action: nil)
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setClippingResistancePriority(.defaultLow, for: .horizontal)
+        more.isBordered = false
+        more.font = .systemFont(ofSize: 11, weight: .medium)
+        more.target = self
+        more.action = #selector(showMore)
+        more.toolTip = "Hidden tabs"
+        more.setAccessibilityLabel("Hidden tabs")
+        more.isHidden = true
+    }
+    override func setViews(_ views: [NSView], in gravity: NSStackView.Gravity) {
+        super.setViews(gravity == .leading && views.contains { $0 is Row } ? views + [more] : views, in: gravity)
+    }
+    @objc private func showMore() {
+        let menu = NSMenu()
+        for row in views(in: .leading).compactMap({ $0 as? Row }) where row.isHidden {
+            let item = menu.addItem(withTitle: row.accessibilityLabel() ?? "", action: #selector(pickHidden), keyEquivalent: "")
+            item.target = self
+            item.representedObject = row
+        }
+        popUp(menu, at: NSPoint(x: 0, y: more.isFlipped ? more.bounds.maxY + 4 : -4), in: more)
+    }
+    @objc private func pickHidden(_ item: NSMenuItem) { _ = (item.representedObject as? Row)?.accessibilityPerformPress() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func layout() {
+        super.layout()
+        let rows = views(in: .leading).compactMap { $0 as? Row }
+        guard let first = rows.first else { return }
+        let title = views(in: .leading).first as? TitleButton
+        let whole = title.map { min($0.intrinsicContentSize.width, TitleButton.longest) } ?? 0
+        let start = first.frame.minX + whole - (title?.frame.width ?? 0)
+        let end = views(in: .trailing).first.map { $0.frame.minX - spacing } ?? stop.map { $0.frame.minX - gap - frame.minX } ?? bounds.width - edgeInsets.right
+        let pick = rows.firstIndex { $0.isAccessibilitySelected() } ?? 0
+        let names = rows.map { ceil($0.nameWidth) }, fixed = rows.map { ceil($0.fittingSize.width - $0.titleWidth) }
+        let byDistance = rows.indices.sorted { abs($0 - pick) < abs($1 - pick) }
+        var shown = rows.count, cap: CGFloat = 0, room: CGFloat = 0
+        while shown > 0 {
+            let kept = byDistance.prefix(shown)
+            room = end - start - kept.reduce(0) { $0 + fixed[$1] } - spacing * CGFloat(shown - 1) - (shown < rows.count ? ceil(more.intrinsicContentSize.width) + spacing : 0)
+            let sorted = kept.map { names[$0] }.sorted()
+            cap = sorted.last ?? 0
+            var left = room, count = CGFloat(sorted.count)
+            for width in sorted {
+                if width * count <= left { left -= width; count -= 1 } else { cap = left / count; break }
+            }
+            if cap >= min(40, sorted.last ?? 0) || shown == 1 { break }
+            shown -= 1
+        }
+        let floor = min(40, names[pick])
+        let titleWidth = whole - max(0, floor - room)
+        cap = max(cap, floor) + min(0, titleWidth)
+        if let title, title.nameCap.constant != max(0, titleWidth) { title.nameCap.constant = max(0, titleWidth) }
+        let hidden = Set(byDistance.dropFirst(shown))
+        for (index, row) in rows.enumerated() {
+            row.capName(cap)
+            if row.isHidden != hidden.contains(index) { row.isHidden = hidden.contains(index) }
+        }
+        let count = "+\(hidden.count)"
+        if more.text != count { more.text = count }
+        if more.isHidden != hidden.isEmpty { more.isHidden = hidden.isEmpty }
+    }
+}
+
+final class PaneBar: TabStrip {
     let hover = BarHover()
     var doubleClick: (() -> Void)?
 
@@ -3554,7 +4234,7 @@ final class BarHover: NSView {
 
 final class LinkButton: NSButton {
     var ink: (rest: NSColor, hover: NSColor) = (.secondaryLabelColor, .labelColor) { didSet { style() } }
-    private var lit = false
+    private var lit = false { didSet { style() } }
     var text = "" { didSet { style() } }
 
     override init(frame: NSRect) {
@@ -3563,14 +4243,9 @@ final class LinkButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
-    override func mouseEntered(with event: NSEvent) { light(true) }
-    override func mouseExited(with event: NSEvent) { light(false) }
-    override func mouseMoved(with event: NSEvent) { if !lit { light(true) } }
-
-    private func light(_ on: Bool) {
-        lit = on
-        style()
-    }
+    override func mouseEntered(with event: NSEvent) { lit = true }
+    override func mouseExited(with event: NSEvent) { lit = false }
+    override func mouseMoved(with event: NSEvent) { if !lit { lit = true } }
 
     private func style() {
         let color = lit ? ink.hover : ink.rest
@@ -3580,7 +4255,14 @@ final class LinkButton: NSButton {
 
 final class HoverButton: NSButton {
     private let glow = Ghost()
-    private var lit = false
+    private var lit = false {
+        didSet {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                glow.animator().alphaValue = lit ? 1 : 0
+            }
+        }
+    }
 
     init(lit image: NSImage, size: CGFloat) {
         super.init(frame: .zero)
@@ -3594,17 +4276,9 @@ final class HoverButton: NSButton {
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    override func mouseEntered(with event: NSEvent) { light(true) }
-    override func mouseExited(with event: NSEvent) { light(false) }
-    override func mouseMoved(with event: NSEvent) { if !lit { light(true) } }
-
-    private func light(_ on: Bool) {
-        lit = on
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
-            glow.animator().alphaValue = on ? 1 : 0
-        }
-    }
+    override func mouseEntered(with event: NSEvent) { lit = true }
+    override func mouseExited(with event: NSEvent) { lit = false }
+    override func mouseMoved(with event: NSEvent) { if !lit { lit = true } }
 }
 
 final class FindBar: NSView, NSTextFieldDelegate {
@@ -3616,24 +4290,27 @@ final class FindBar: NSView, NSTextFieldDelegate {
     var total: Int? { didSet { counted() } }
     var selected: Int? { didSet { counted() } }
 
-    init(_ surface: SurfaceView) {
-        self.surface = surface
-        super.init(frame: .zero)
-        appearance = NSAppearance(named: .darkAqua)
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.shadowOpacity = 0.4
-        layer?.shadowRadius = 4
-        layer?.shadowOffset = NSSize(width: 0, height: -1)
+    static func card(_ card: NSView & NSTextFieldDelegate, well: NSView, field: NSTextField, placeholder: String) {
+        card.wantsLayer = true
+        card.layer?.cornerRadius = 8
+        card.layer?.shadowOpacity = 0.4
+        card.layer?.shadowRadius = 4
+        card.layer?.shadowOffset = NSSize(width: 0, height: -1)
         well.wantsLayer = true
         well.layer?.cornerRadius = 6
-        field.placeholderString = "Find"
+        field.placeholderString = placeholder
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 13)
         field.cell?.isScrollable = true
-        field.delegate = self
+        field.delegate = card
+    }
+
+    init(_ surface: SurfaceView) {
+        self.surface = surface
+        super.init(frame: .zero)
+        Self.card(self, well: well, field: field, placeholder: "Find")
         count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         count.textColor = .secondaryLabelColor
         let buttons = [("chevron.up", "Next", "Next (⌘G)", "navigate_search:next"), ("chevron.down", "Previous", "Previous (⇧⌘G)", "navigate_search:previous"), ("xmark", "Close", "Close (Esc)", "end_search")].map { symbol, label, tip, action in
@@ -3683,14 +4360,12 @@ final class FindBar: NSView, NSTextFieldDelegate {
         removeFromSuperview()
     }
 
-    private func binding(_ action: String) { surface.surface.map { _ = ghostty_surface_binding_action($0, action, UInt(action.utf8.count)) } }
-
     private func counted() { count.stringValue = total.map { "\(selected.map { String($0 + 1) } ?? "-")/\($0)" } ?? "" }
 
     private func search() {
         pending?.cancel()
         let needle = field.stringValue
-        let send = DispatchWorkItem { [weak self] in self?.binding("search:" + needle) }
+        let send = DispatchWorkItem { [weak self] in self?.surface.binding("search:" + needle) }
         pending = send
         DispatchQueue.main.asyncAfter(deadline: .now() + (needle.isEmpty || needle.count >= 3 ? 0 : 0.3), execute: send)
     }
@@ -3700,17 +4375,17 @@ final class FindBar: NSView, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.insertNewline):
-            binding(NSApp.currentEvent?.modifierFlags.contains(.shift) == true ? "navigate_search:previous" : "navigate_search:next")
+            surface.binding(NSApp.currentEvent?.modifierFlags.contains(.shift) == true ? "navigate_search:previous" : "navigate_search:next")
         case #selector(NSResponder.cancelOperation):
             guard field.stringValue.isEmpty else { return window?.makeFirstResponder(surface) ?? true }
-            binding("end_search")
+            surface.binding("end_search")
         default:
             return false
         }
         return true
     }
 
-    @objc private func press(_ button: NSButton) { binding(button.identifier!.rawValue) }
+    @objc private func press(_ button: NSButton) { surface.binding(button.identifier!.rawValue) }
 }
 
 final class GoTo: NSView, NSTextFieldDelegate {
@@ -3727,23 +4402,9 @@ final class GoTo: NSView, NSTextFieldDelegate {
         self.entries = entries
         self.pick = pick
         super.init(frame: .zero)
-        appearance = NSAppearance(named: .darkAqua)
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.shadowOpacity = 0.4
-        layer?.shadowRadius = 4
-        layer?.shadowOffset = NSSize(width: 0, height: -1)
         let well = NSView()
-        well.wantsLayer = true
-        well.layer?.cornerRadius = 6
-        well.layer?.backgroundColor = NSColor(white: 1, alpha: 0.1).cgColor
-        field.placeholderString = "Go to tab"
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.font = .systemFont(ofSize: 13)
-        field.cell?.isScrollable = true
-        field.delegate = self
+        FindBar.card(self, well: well, field: field, placeholder: "Go to tab")
+        well.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.1).cgColor
         list.orientation = .vertical
         list.spacing = 2
         let stack = NSStackView(views: [well, list])
@@ -3785,7 +4446,7 @@ final class GoTo: NSView, NSTextFieldDelegate {
 
     private func draw() {
         list.setViews(shown.enumerated().map { offset, entry in
-            Row(entry.title, icon: entry.claude == nil ? NSImage(systemSymbolName: "apple.terminal.fill", accessibilityDescription: "Shell") : nil, spark: entry.claude.map { Spark($0, phase: 0, selected: offset == index, mark: entry.tab.mark) },
+            Row(entry.title, icon: entry.claude == nil ? NSImage(systemSymbolName: "apple.terminal.fill", accessibilityDescription: "Shell") : nil, spark: entry.claude.map { Spark($0, phase: 0, selected: offset == index, key: entry.tab.name, mark: entry.tab.mark) },
                 detail: entry.place, bar: entry.bar, selected: offset == index, fill: .controlAccentColor) { [unowned self] in choose(entry.tab) }
         }, in: .top)
         for row in list.views { row.widthAnchor.constraint(equalTo: list.widthAnchor).isActive = true }
@@ -3875,11 +4536,12 @@ final class GroupEntry: NSView {
 
 final class Row: NSView, NSTextFieldDelegate {
     static let tabFont = NSFont.systemFont(ofSize: 12, weight: .medium)
-    static let hoverFill = NSColor(white: 1, alpha: 0.09)
-    static let pickFill = NSColor(white: 1, alpha: 0.12)
+    static var hoverFill: NSColor { ink(0.09) }
+    static var pickFill: NSColor { ink(0.12) }
     private var hoverable = false
     private let action: () -> Void
     private let close: (() -> Void)?
+    private weak var activity: ActivityView?
     private var hoverButton: NSButton?
     private var hovered = false
     var contextMenu: (() -> NSMenu)?
@@ -3896,12 +4558,23 @@ final class Row: NSView, NSTextFieldDelegate {
     private var problem: ((String) -> String?)?
     private var renamed: ((String?) -> Void)?
     private var typedWidth: NSLayoutConstraint?
+    private var typedLimit = CGFloat.infinity
+    private var sparkRoom: CGFloat = 17
+    private weak var titleLine: NSStackView?
     private weak var tabClose: NSButton?
     private var dimmed: [NSView] = []
     var closeSlot: NSRect? {
         guard detail == nil else { return nil }
         let name = convert(titleLabel.frame, from: titleLabel.superview)
         return tabClose.map { convert($0.frame, from: $0.superview) } ?? NSRect(x: name.maxX + 5, y: name.minY, width: 10, height: name.height)
+    }
+    private lazy var nameCap = titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 10_000)
+    var nameWidth: CGFloat { renamed != nil && detail == nil ? typedWidth!.constant : titleLabel.intrinsicContentSize.width }
+    var titleWidth: CGFloat { min(nameWidth, nameCap.isActive ? nameCap.constant : 10_000) }
+    func capName(_ width: CGFloat) {
+        guard nameCap.constant != width else { return }
+        nameCap.constant = width
+        nameCap.isActive = true
     }
     var nameBaseline: CGFloat {
         titleLabel.convert(NSPoint(x: 0, y: titleLabel.isFlipped ? titleLabel.firstBaselineOffsetFromTop : titleLabel.bounds.height - titleLabel.firstBaselineOffsetFromTop), to: nil).y
@@ -3910,7 +4583,8 @@ final class Row: NSView, NSTextFieldDelegate {
     init(_ title: String, icon: NSImage? = nil, spark: Spark? = nil, badge: NSView? = nil, meter: NSTextField? = nil, activity: ActivityView? = nil, detail: String? = nil, bar: NSColor? = nil, head: Bool = false, pin: Bool = false, tint: NSColor? = nil, selected: Bool, fill: NSColor, close: (() -> Void)? = nil, action: @escaping () -> Void) {
         self.action = action
         self.close = close
-        titleLabel = NSTextField(labelWithString: title)
+        self.activity = activity
+        titleLabel = NSTextField(labelWithString: head ? title.uppercased() : title)
         self.detail = detail
         super.init(frame: .zero)
         setAccessibilityElement(true)
@@ -3921,7 +4595,7 @@ final class Row: NSView, NSTextFieldDelegate {
         layer?.cornerRadius = detail == nil ? 5 : 8
         layer?.backgroundColor = selected ? fill.cgColor : nil
         titleLabel.font = head ? .systemFont(ofSize: 11, weight: .semibold) : detail == nil ? Self.tabFont : .systemFont(ofSize: 12, weight: .bold)
-        titleLabel.textColor = head || selected || detail != nil ? .labelColor : .secondaryLabelColor
+        titleLabel.textColor = selected && detail != nil ? .white : head || selected || detail != nil ? .labelColor : .secondaryLabelColor
         titleLabel.lineBreakMode = .byTruncatingTail
         if detail != nil { titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
         let name = NSStackView(views: [titleLabel] + [meter].compactMap { $0 })
@@ -3929,6 +4603,7 @@ final class Row: NSView, NSTextFieldDelegate {
         name.spacing = 5
         name.setHuggingPriority(.defaultHigh, for: .horizontal)
         let titleLine = NSStackView(views: [name])
+        self.titleLine = titleLine
         titleLine.spacing = 5
         if let icon {
             let iconView = NSImageView(image: icon)
@@ -3999,6 +4674,7 @@ final class Row: NSView, NSTextFieldDelegate {
         if let activity, activity.single {
             titleLine.addView(activity.sparks, in: .leading)
             titleLine.setCustomSpacing(4, after: name)
+            sparkRoom = 0
         } else if activity != nil {
             stack.setCustomSpacing(3, after: titleLine)
         }
@@ -4057,7 +4733,7 @@ final class Row: NSView, NSTextFieldDelegate {
         let onName = NSRect(origin: .zero, size: NSSize(width: min(titleLabel.bounds.width, titleLabel.cell!.cellSize.width), height: titleLabel.bounds.height)).contains(point)
         guard event.clickCount == 2, onName, let rename else {
             let stack = superview as? NSStackView, index = stack?.arrangedSubviews.firstIndex(of: self)
-            action()
+            if activity?.openLine(event) != true { action() }
             return (index.flatMap { stack?.arrangedSubviews[$0] } as? Row)?.drag(from: event) ?? ()
         }
         rename()
@@ -4096,7 +4772,7 @@ final class Row: NSView, NSTextFieldDelegate {
                 cacheDisplay(in: bounds, to: snapshot)
                 ghost = Ghost(image: NSImage(cgImage: snapshot.cgImage!, size: bounds.size))
                 ghost!.wantsLayer = true
-                ghost!.layer?.backgroundColor = NSColor.black.cgColor
+                ghost!.layer?.backgroundColor = (ClaudeTTY.light ? NSColor.white : .black).cgColor
                 ghost!.layer?.cornerRadius = layer!.cornerRadius
                 stack.addSubview(ghost!)
                 alphaValue = 0
@@ -4174,15 +4850,17 @@ final class Row: NSView, NSTextFieldDelegate {
     func edit(_ problem: @escaping (String) -> String?, done: @escaping (String?) -> Void) {
         self.problem = problem
         renamed = done
+        titleLabel.stringValue = accessibilityLabel() ?? titleLabel.stringValue
         titleLabel.isEditable = true
         titleLabel.delegate = self
-        if detail != nil {
-            titleLabel.trailingAnchor.constraint(equalTo: hoverButton?.leadingAnchor ?? trailingAnchor, constant: -4).isActive = true
-        } else {
-            typedWidth = titleLabel.widthAnchor.constraint(equalToConstant: 0)
-            typedWidth?.isActive = true
-            fitTyped()
-        }
+        layoutSubtreeIfNeeded()
+        let name = convert(titleLabel.bounds, from: titleLabel)
+        let after = titleLine?.views.filter { convert($0.bounds, from: $0).minX >= name.maxX }.map { $0.fittingSize.width + 5 }.reduce(0, +) ?? 0
+        typedLimit = (hoverButton.map { $0.frame.minX - 4 } ?? bounds.maxX - 8) - after - sparkRoom - name.minX
+        typedWidth = titleLabel.widthAnchor.constraint(equalToConstant: 0)
+        typedWidth?.priority = .required - 1
+        typedWidth?.isActive = true
+        fitTyped()
         window?.makeFirstResponder(titleLabel)
     }
 
@@ -4191,7 +4869,11 @@ final class Row: NSView, NSTextFieldDelegate {
         fitTyped()
     }
 
-    private func fitTyped() { typedWidth?.constant = ceil((titleLabel.stringValue as NSString).size(withAttributes: [.font: titleLabel.font!]).width) + 6 }
+    private func fitTyped() {
+        let width = ceil((titleLabel.stringValue as NSString).size(withAttributes: [.font: titleLabel.font!]).width) + 6
+        typedWidth?.constant = detail == nil ? width : min(width, typedLimit)
+        superview?.needsLayout = true
+    }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
@@ -4202,7 +4884,9 @@ final class Row: NSView, NSTextFieldDelegate {
         return true
     }
 
-    func controlTextDidEndEditing(_ obj: Notification) { finish(problem?(titleLabel.stringValue) == nil ? titleLabel.stringValue : nil) }
+    func controlTextDidEndEditing(_ obj: Notification) {
+        finish(problem?(titleLabel.stringValue) == nil ? titleLabel.stringValue : nil)
+    }
 
     private func finish(_ name: String?) {
         guard let renamed else { return }
@@ -4244,13 +4928,16 @@ final class Row: NSView, NSTextFieldDelegate {
 }
 
 struct Activity: Equatable {
-    struct Cell: Equatable { let name, title, state: String, mark: String? }
+    struct Cell: Equatable { let name, title, state: String, mark: String?, cold: Bool }
     var sparks: [Cell]
+    var name: String
     var who, what: String
     var ask: Bool
     var ago: String
     var agents: String?
 }
+
+func ink(_ alpha: CGFloat) -> NSColor { NSColor(white: ClaudeTTY.light ? 0 : 1, alpha: alpha) }
 
 func dark(_ hex: Int, light: NSColor) -> NSColor {
     NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(srgbRed: CGFloat(hex >> 16) / 255, green: CGFloat(hex >> 8 & 0xff) / 255, blue: CGFloat(hex & 0xff) / 255, alpha: 1) : light }
@@ -4268,7 +4955,7 @@ final class ActivityView: NSStackView {
     private let agentsMenu: () -> NSMenu
     private var shown: Activity?
     private var turn = 0
-    var working: Bool { sparks.views.contains { ($0 as? Spark)?.kind == "working" } }
+    var moving: Bool { sparks.views.contains { ($0 as? Spark)?.moving == true } }
 
     init(selected: Bool, single: Bool, width: CGFloat, open: @escaping (String) -> Void, agentsMenu: @escaping () -> NSMenu) {
         self.selected = selected
@@ -4282,12 +4969,12 @@ final class ActivityView: NSStackView {
         count.font = .systemFont(ofSize: 10)
         count.ink = selected ? (NSColor(white: 1, alpha: 0.8), .white) : (.secondaryLabelColor, .labelColor)
         count.toolTip = "Show agents"
-        sparks.spacing = 3
+        sparks.spacing = 6
         sparks.heightAnchor.constraint(equalToConstant: 14).isActive = true
         line.font = .systemFont(ofSize: 11)
         line.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         ago.font = .systemFont(ofSize: 9.5)
-        ago.textColor = selected ? NSColor(white: 1, alpha: 0.6) : dark(0x6e6e73, light: .tertiaryLabelColor)
+        ago.textColor = selected ? NSColor(white: 1, alpha: 0.6) : dark(0x6e6e73, light: .secondaryLabelColor)
         let lineRow = NSStackView(views: [line, ago])
         lineRow.spacing = 4
         lineRow.alignment = .firstBaseline
@@ -4300,14 +4987,22 @@ final class ActivityView: NSStackView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    func cold(_ name: String) -> Bool { shown?.sparks.first { $0.name == name }?.cold ?? false }
+
+    func openLine(_ event: NSEvent) -> Bool {
+        guard let row = line.superview, !row.isHidden, let name = shown?.name, row.bounds.contains(row.convert(event.locationInWindow, from: nil)) else { return false }
+        open(name)
+        return true
+    }
+
     func show(_ activity: Activity) {
         guard activity != shown else { return }
         if activity.sparks.map(\.name) != shown?.sparks.map(\.name) || activity.agents != shown?.agents {
             count.text = activity.agents ?? ""
-            let room = Int((width - (activity.agents == nil ? 0 : count.fittingSize.width + 3) + 3) / 16)
+            let room = Int((width - (activity.agents == nil ? 0 : count.fittingSize.width + 6) + 6) / 19)
             let fit = activity.sparks.count <= room ? activity.sparks[...] : activity.sparks.prefix(room - 1)
             let cells = fit.enumerated().map { index, cell in
-                let spark = Spark(cell.state, phase: [0, 2, 3][index % 3], selected: selected)
+                let spark = Spark(cell.state, phase: [0, 2, 3][index % 3], selected: selected, key: cell.name)
                 spark.target = self
                 spark.action = #selector(openTab)
                 spark.identifier = .init(cell.name)
@@ -4320,6 +5015,7 @@ final class ActivityView: NSStackView {
         for case (let spark as Spark, let cell) in zip(sparks.views, activity.sparks) where spark.action != nil {
             spark.kind = cell.state
             spark.mark = cell.mark
+            spark.cold = cell.cold
             spark.toolTip = cell.title
             spark.setAccessibilityLabel([cell.title, cell.state].filter { !$0.isEmpty }.joined(separator: ", "))
         }
@@ -4337,13 +5033,14 @@ final class ActivityView: NSStackView {
         line.attributedStringValue = text
         let room = width - (line.fittingSize.width - text.size().width) - (ago.isHidden ? 0 : ago.fittingSize.width + 4)
         if text.size().width > room, !activity.what.isEmpty {
-            let what = Array(activity.what)
+            let mark = activity.ask && activity.what.hasSuffix("?") ? "…?" : "…"
+            let what = Array(mark == "…" ? activity.what : String(activity.what.dropLast()))
             var low = 0, high = what.count
             while low < high {
                 let mid = (low + high + 1) / 2
-                if full + NSAttributedString(string: String(what[..<mid]) + "…", attributes: whatAttributes).size().width <= room { low = mid } else { high = mid - 1 }
+                if full + NSAttributedString(string: String(what[..<mid]) + mark, attributes: whatAttributes).size().width <= room { low = mid } else { high = mid - 1 }
             }
-            text.replaceCharacters(in: NSRange(location: text.length - activity.what.utf16.count, length: activity.what.utf16.count), with: NSAttributedString(string: String(what[..<low]).trimmingCharacters(in: .whitespaces) + "…", attributes: whatAttributes))
+            text.replaceCharacters(in: NSRange(location: text.length - activity.what.utf16.count, length: activity.what.utf16.count), with: NSAttributedString(string: String(what[..<low]).trimmingCharacters(in: .whitespaces) + mark, attributes: whatAttributes))
             line.attributedStringValue = text
         }
     }
@@ -4361,28 +5058,57 @@ final class Spark: NSButton {
     static let orange = NSColor(srgbRed: 215 / 255, green: 119 / 255, blue: 87 / 255, alpha: 1)
     static let frames = ["✢", "✳", "✶", "✻", "✽", "✽", "✻", "✶", "✳", "✢"]
     static let morph = NSImage(contentsOfFile: deps + "/spark.webp")?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-    static let styleKey = "spinner " + zmxDir
-    static var style = UserDefaults.standard.string(forKey: styleKey) ?? "dots"
+    static var settings = ["spinner": "dots", "clawd wait": "C", "sleep z": "on"].reduce(into: [String: String]()) { $0[$1.key] = UserDefaults.standard.string(forKey: $1.key + " " + zmxDir) ?? $1.value }
+    static var style: String { settings["spinner"]! }
+    private var style: String { setting("spinner") }
+    private func setting(_ key: String) -> String { picks[key] ?? Self.settings[key]! }
+    private let picks: [String: String]
     var kind: String {
         didSet {
             guard kind != oldValue else { return }
-            glyph = kind == "working" ? Self.frames[phase] : "✻"
+            glyph = moving ? Self.frames[phase] : "✻"
             refresh()
         }
     }
-    var mark: String? { didSet { if mark != oldValue { refresh() } } }
+    var mark: String? {
+        didSet {
+            if mark == nil, dots == nil { Marks.forget(key) }
+            if mark != oldValue { refresh() }
+        }
+    }
+    var cold = false {
+        didSet { if cold != oldValue { refresh() } }
+    }
     private var dots: Marks?
-    var shown: String { dots == nil ? glyph : mark ?? "" }
+    private var figure: CALayer?
+    private var playing: String?
+    private var acting = false
+    private var hold: Timer?
+    private var onScreen: (act: String, ends: CFTimeInterval)?
+    private var queued: String?
+    private static var changed: [String: (from: String?, to: String, at: CFTimeInterval)] = [:]
+    private static var acted: [String: (act: String, at: CFTimeInterval)] = [:]
+    var shown: String { (dots != nil ? mark ?? "" : style == "clawd" ? mark ?? glyph : glyph) + (cold ? " cold" : "") }
+    var drawn: String { dots?.target ?? (acting ? onScreen?.act : nil) ?? "" }
+    var loopAt: String {
+        guard let loop = figure?.animation(forKey: "loop") ?? figure?.sublayers?.lazy.compactMap({ $0.animation(forKey: "rest") }).first else { return "" }
+        let period = loop.duration * (loop.autoreverses ? 2 : 1)
+        return String(format: "\t%.3f\t%.3f", (loop.beginTime - loop.timeOffset).truncatingRemainder(dividingBy: period), period)
+    }
+    var moving: Bool { kind == "working" || kind == "background" }
     private let phase: Int
     private let selected: Bool
+    private let key: String
     private(set) var glyph: String
 
-    init(_ kind: String, phase: Int, selected: Bool, mark: String? = nil, glyph: String? = nil) {
+    init(_ kind: String, phase: Int, selected: Bool, key: String = "", mark: String? = nil, glyph: String? = nil, picks: [String: String] = [:]) {
+        self.picks = picks
         self.kind = kind
         self.mark = mark
+        self.key = key
         self.phase = phase
         self.selected = selected
-        self.glyph = glyph ?? (kind == "working" ? Self.frames[phase] : "✻")
+        self.glyph = glyph ?? (["working", "background"].contains(kind) ? Self.frames[phase] : "✻")
         super.init(frame: .zero)
         title = ""
         isBordered = false
@@ -4393,14 +5119,26 @@ final class Spark: NSButton {
 
     private func refresh() {
         needsDisplay = true
-        guard let mark, Self.style == "dots" || Self.style == "sparkle" && Self.morph == nil else {
-            if dots != nil { layer?.sublayers = nil }
-            dots = nil
-            return morphing()
+        guard let mark, style == "dots" || style == "sparkle" && Self.morph == nil else {
+            guard let dots, mark == nil, window != nil else {
+                if dots != nil { layer?.sublayers = nil }
+                dots = nil
+                morphing()
+                return mascot(grow: false)
+            }
+            return dots.settle { [weak self] in
+                guard let self, self.mark == nil, self.dots === dots else { return }
+                self.fade()
+                self.layer?.sublayers = nil
+                self.dots = nil
+                self.needsDisplay = true
+                self.mascot(grow: true)
+            }
         }
         if dots == nil {
-            let dots = Marks(selected: selected, phase: phase)
+            let dots = Marks(selected: selected, phase: phase, key: key)
             wantsLayer = true
+            if window != nil { fade() }
             dots.layer.frame = NSRect(origin: .zero, size: intrinsicContentSize)
             layer?.sublayers = [dots.layer]
             self.dots = dots
@@ -4408,9 +5146,100 @@ final class Spark: NSButton {
         dots?.show(mark)
     }
 
+    private func mascot(grow: Bool) {
+        let act = style == "clawd" ? mark.map { $0 == "background" ? "background " + setting("clawd wait") : $0 } : nil
+        guard dots == nil, act != nil || ["", "idle", "asleep"].contains(kind) else {
+            Self.changed[key] = nil
+            hold?.invalidate()
+            queued = nil
+            acting = false
+            figure?.removeFromSuperlayer()
+            figure = nil
+            playing = nil
+            return
+        }
+        let ink = selected ? "selected" : effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
+        let rest = act == nil && style == "dots", frost = Clawd.frost(ink)
+        let next = (act ?? (rest ? "dots " + kind : kind)) + (cold ? " cold " : " ") + ink
+        if figure?.superlayer == nil {
+            let figure = CALayer()
+            figure.contentsScale = 2
+            figure.magnificationFilter = .nearest
+            figure.actions = ["contents": NSNull()]
+            wantsLayer = true
+            layer?.addSublayer(figure)
+            self.figure = figure
+            playing = nil
+        }
+        guard grow || playing != next, let figure else { return }
+        if act == "think", queued != nil {
+            playing = next
+            return
+        }
+        hold?.invalidate()
+        queued = nil
+        if playing != nil, !acting, act != nil || rest { fade() }
+        playing = next
+        needsDisplay = true
+        defer { acting = act != nil }
+        if let act {
+            Self.changed[key] = nil
+            figure.frame = CGRect(x: -1.5, y: 1, width: 16, height: 17)
+            func start() {
+                if Self.acted[key]?.act != act { Self.acted[key] = (act, CACurrentMediaTime()) }
+                onScreen = (act, CACurrentMediaTime() + Clawd.act(figure, act, ink: ink, since: Self.acted[key]!.at))
+            }
+            let wait = (onScreen?.ends ?? 0) - CACurrentMediaTime()
+            guard acting, onScreen?.act != "think", wait > 0, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+                if acting { fade() }
+                start()
+                return
+            }
+            queued = act
+            hold = .scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                queued = nil
+                fade()
+                start()
+                if playing != next {
+                    playing = nil
+                    mascot(grow: false)
+                }
+            }
+            return
+        }
+        Self.acted[key] = nil
+        if rest {
+            figure.frame = NSRect(origin: .zero, size: intrinsicContentSize)
+            let gray: [CGFloat] = ink == "dark" ? [138, 144] : [72, 76]
+            let color = cold ? CGColor(srgbRed: frost[0] / 255, green: frost[1] / 255, blue: frost[2] / 255, alpha: 1) : ink == "selected" ? .white : CGColor(srgbRed: gray[0] / 255, green: gray[0] / 255, blue: gray[1] / 255, alpha: 1)
+            Marks.rest(figure, asleep: kind == "asleep", color: color, fade: ["dark": 0.75, "light": 1][ink] ?? 0.85, phase: phase)
+        } else {
+            figure.frame = CGRect(x: -1.5, y: 1, width: 16, height: 17)
+            figure.sublayers = nil
+            if Self.changed[key]?.to != kind { Self.changed[key] = (Self.changed[key]?.to, kind, CACurrentMediaTime()) }
+            let change = Self.changed[key]!
+            Clawd.play(figure, from: change.from, to: kind, since: change.at, grow: grow, seed: Double(phase) * 1.7, frost: cold ? frost : [])
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        guard playing?.hasSuffix(" selected") == false else { return }
+        playing = nil
+        mascot(grow: false)
+    }
+
+    private func fade() {
+        let fade = CATransition()
+        fade.type = .fade
+        fade.duration = 0.2
+        layer?.add(fade, forKey: nil)
+    }
+
     private func morphing() {
-        guard let morph = Self.morph, Self.style == "sparkle" else { return }
-        guard kind == "working" else {
+        guard let morph = Self.morph, style == "sparkle" else { return }
+        guard moving else {
             layer?.sublayers = nil
             return
         }
@@ -4428,7 +5257,7 @@ final class Spark: NSButton {
             play.timeOffset = Double(phase) * 0.42
             mask.add(play, forKey: nil)
         }
-        ink.backgroundColor = (selected ? NSColor.white : Self.orange).cgColor
+        ink.backgroundColor = selected ? .white : Marks.ink(kind == "background" ? "background" : nil)
         ink.frame = bounds.isEmpty ? NSRect(origin: .zero, size: intrinsicContentSize) : bounds
         mask.frame = ink.bounds
         ink.mask = mask
@@ -4446,9 +5275,7 @@ final class Spark: NSButton {
                 return
             }
             guard hypot(next.locationInWindow.x - event.locationInWindow.x, next.locationInWindow.y - event.locationInWindow.y) > 3 else { continue }
-            var row = superview
-            while let view = row, !(view is Row) { row = view.superview }
-            return row?.mouseDown(with: event) ?? ()
+            return sequence(first: self as NSView, next: \.superview).first { $0 is Row }?.mouseDown(with: event) ?? ()
         }
     }
 
@@ -4459,32 +5286,35 @@ final class Spark: NSButton {
         case "more": (selected ? NSColor(white: 1, alpha: 0.3) : dark(0x4a4a4f, light: .tertiaryLabelColor), selected ? .white : dark(0xe6e6ea, light: .white), 7.5)
         default: (nil, selected ? dark(0xc8d9fc, light: .white) : dark(0x8a8a90, light: .tertiaryLabelColor), 12)
         }
-        guard dots == nil else { return }
+        guard dots == nil, figure == nil else { return }
         if let fill {
             fill.setFill()
             NSBezierPath(ovalIn: bounds).fill()
         }
-        guard kind != "working" || Self.morph == nil || Self.style != "sparkle" else { return }
+        guard !moving || Self.morph == nil || style != "sparkle" else { return }
         let text = NSAttributedString(string: glyph, attributes: [.font: NSFont.systemFont(ofSize: size, weight: kind == "more" ? .semibold : .regular), .foregroundColor: ink])
         let box = text.boundingRect(with: bounds.size, options: .usesDeviceMetrics)
         text.draw(with: NSRect(x: bounds.midX - box.midX, y: bounds.midY - box.midY, width: bounds.width, height: bounds.height))
     }
 
     func spin(_ turn: Int) {
-        guard kind == "working", dots == nil else { return }
+        guard moving, dots == nil else { return }
         glyph = Self.frames[(turn + phase) % Self.frames.count]
         needsDisplay = true
     }
 }
 
 @discardableResult func popUp(_ menu: NSMenu, at point: NSPoint, in view: NSView) -> Bool {
-    guard let probe else { return menu.popUp(positioning: nil, at: point, in: view) }
+    guard let probe, !FileManager.default.fileExists(atPath: probe + "/real") else {
+        if probe != nil { RunLoop.main.add(Timer(timeInterval: 3, repeats: false) { _ in menu.cancelTracking() }, forMode: .common) }
+        return menu.popUp(positioning: nil, at: point, in: view)
+    }
     let anchor = view.convert(point, to: nil)
     menu.update()
     let lines = ["at \(Int(anchor.x)) \(Int(anchor.y))"] + menu.items.map { item in
         if item.isSeparatorItem { return "-" }
         if let view = item.view, !view.subviews.isEmpty { return view.subviews.map { "button " + ($0.accessibilityLabel() ?? "") }.joined(separator: "\n") }
-        return item.title + (item.keyEquivalent.isEmpty ? "" : " ⌘" + item.keyEquivalent) + (item.state == .on ? " ✓" : "") + (item.isEnabled ? "" : " (off)") + (item.subtitle.map { " [\($0)]" } ?? "") + (item.submenu.map { " ▸ " + $0.items.map(\.title).joined(separator: ", ") } ?? "")
+        return item.title + (item.keyEquivalent.isEmpty ? "" : " ⌘" + item.keyEquivalent) + (item.state == .on ? " ✓" : "") + (item.isEnabled ? "" : " (off)") + (item.subtitle.map { " [\($0)]" } ?? "") + ((item.view as? InfoRow).map { " {\($0.info)}" } ?? "") + (item.submenu.map { " ▸ " + $0.items.map(\.title).joined(separator: ", ") } ?? "")
     }
     try? lines.joined(separator: "\n").write(toFile: probe + "/menu", atomically: true, encoding: .utf8)
     let views = menu.items.compactMap { item in item.view is GroupEntry ? item.view : item.attributedTitle.map { text in
@@ -4520,4 +5350,378 @@ final class Spark: NSButton {
     if let picked, let index = picked.items.firstIndex(where: { $0.title == path.last && $0.isEnabled }) { picked.performActionForItem(at: index) }
     (menu.items.compactMap(\.view).flatMap(\.subviews).first { $0.accessibilityLabel() == pick } as? NSButton)?.performClick(nil)
     return true
+}
+
+
+extension ClaudeTTY {
+    @objc private func setUp() { openGuide(byItself: false) }
+
+    private func openGuide(byItself: Bool) {
+        if guide == nil {
+            if !hidden { _ = windowShouldClose(window) }
+            let kept = [Self.themeKey, Self.soundKey, Self.askKey, Self.lookKey] + Spark.settings.keys.map { $0 + " " + zmxDir }
+            let found = kept.map { ($0, UserDefaults.standard.object(forKey: $0)) }, sparks = Spark.settings
+            let theme = UserDefaults.standard.string(forKey: Self.themeKey), themes = ["Light", "Dark", "System"]
+            let icons = Guide.column([], spacing: 8)
+            guideIcons(icons)
+            let preview = GroundShot(), blur = steps(Self.blurs, "background-blur", tag: 1)
+            blur.isEnabled = Self.look["background-opacity"] != "1"
+            let background = Guide.column([preview, Guide.line("Transparency", steps(Self.transparencies, "background-opacity", tag: 0)), Guide.line("Blur", blur)], spacing: 10)
+            let bypass = NSSwitch()
+            bypass.controlSize = .small
+            bypass.state = UserDefaults.standard.bool(forKey: Self.askKey) ? .off : .on
+            bypass.target = self
+            bypass.action = #selector(toggleBypass)
+            let sound = NSPopUpButton()
+            sound.controlSize = .small
+            sound.font = .systemFont(ofSize: 13)
+            sound.menu!.addItem(withTitle: "None", action: nil, keyEquivalent: "").representedObject = ""
+            Self.sounds(sound.menu!, action: nil)
+            sound.menu!.removeItem(at: sound.menu!.numberOfItems - 1)
+            sound.selectItem(at: sound.menu!.items.firstIndex { $0.representedObject as? String == UserDefaults.standard.string(forKey: Self.soundKey) ?? "Glass" } ?? 0)
+            sound.target = self
+            sound.action = #selector(guideSound)
+            let claude = Guide.column([Guide.line("Bypass Permissions in New Claude Tabs", bypass), Guide.line("Notification Sound", sound)], spacing: 10)
+            let buttons = (byItself ? [("Skip", "⎋"), ("Done", "↩")] : [("Done", "↩")]).map { title, key in
+                let button = NSButton(title: title, target: self, action: #selector(endGuide(_:)))
+                button.keyEquivalent = key == "↩" ? "\r" : "\u{1b}"
+                Self.keyed(button, key)
+                return button
+            }
+            let themeRow = Tile.row(themes.map { ($0, ThemeShot($0.lowercased())) }, picked: ["light": 0, "dark": 1][theme ?? ""] ?? 2, height: 100) { [unowned self] in choose(#selector(pickTheme), nil, title: themes[$0]) }
+            guide = Guide([("Theme", themeRow), ("Icons", icons), ("Background", background), ("Claude", claude)], preview: preview, blur: blur, buttons: buttons, byItself: byItself)
+            guide!.finish = { [unowned self] in endGuide(skip: $0) }
+            guide!.undo = { [unowned self] in
+                for (key, value) in found { UserDefaults.standard.set(value, forKey: key) }
+                Spark.settings = sparks
+                self.theme()
+                rebuild()
+                animate()
+                relook()
+            }
+            if probe != nil { guide!.setFrameOrigin(NSPoint(x: 20_000, y: 20_000)) }
+        }
+        showWindow()
+    }
+
+    private func guideIcons(_ stack: NSStackView) {
+        let style = Spark.style, looks = ["Terminal", "Hourglass", "Fishing"], letters = ["A", "B", "C"]
+        let pick = { [unowned self] (setting: String, value: String) in
+            choose(#selector(pickSpinner), [setting, value])
+            DispatchQueue.main.async { self.guideIcons(stack) }
+        }
+        let states: [[(String, String?)]] = [[("working", "code"), ("working", "think"), ("working", "write"), ("working", "default")], [("waiting", "blocked"), ("background", "background"), ("idle", nil), ("asleep", nil)]]
+        let styles = Tile.row([("Dots", IconShot(states, scale: 1.5, picks: ["spinner": "dots"], height: 100)), ("Clawd", IconShot(states, scale: 1, picks: ["spinner": "clawd"], height: 100))], picked: ["dots": 0, "clawd": 1][style], height: 100) { pick("spinner", ["dots", "clawd"][$0]) }
+        stack.setViews(style != "clawd" ? [styles] : [
+            styles,
+            Guide.label("Clawd Waiting on a Command", 12, .medium, .secondaryLabelColor),
+            Tile.row(letters.enumerated().map { (looks[$0], IconShot([[("background", "background")]], scale: 2, picks: ["spinner": style, "clawd wait": $1], height: 64)) }, picked: letters.firstIndex(of: Spark.settings["clawd wait"]!) ?? 0, height: 64) { pick("clawd wait", letters[$0]) },
+        ], in: .top)
+    }
+
+    private func steps(_ steps: [(title: String, value: String)], _ key: String, tag: Int) -> NSSegmentedControl {
+        let control = NSSegmentedControl(labels: steps.map(\.title), trackingMode: .selectOne, target: self, action: #selector(guideLook))
+        control.selectedSegment = steps.firstIndex { $0.value == Self.look[key] } ?? 2
+        control.controlSize = .small
+        control.tag = tag
+        return control
+    }
+
+    private func choose(_ action: Selector, _ object: Any?, title: String = "") {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.representedObject = object
+        perform(action, with: item)
+    }
+
+    @objc private func guideLook(_ control: NSSegmentedControl) {
+        let (key, steps) = control.tag == 0 ? ("background-opacity", Self.transparencies) : ("background-blur", Self.blurs)
+        choose(#selector(pickLook), [key: steps[control.selectedSegment].value])
+        guide?.relook(blur: Self.look["background-opacity"] != "1")
+    }
+
+    @objc private func guideSound(_ popup: NSPopUpButton) { choose(#selector(pickSound), popup.selectedItem?.representedObject) }
+
+    @objc private func endGuide(_ button: NSButton) { endGuide(skip: button.keyEquivalent == "\u{1b}") }
+
+    private func endGuide(skip: Bool) {
+        guard let guide else { return }
+        if skip { guide.undo() }
+        guide.orderOut(nil)
+        self.guide = nil
+        showWindow()
+    }
+}
+
+final class Guide: NSWindow {
+    let byItself: Bool
+    var finish: (Bool) -> Void = { _ in }
+    var undo: () -> Void = {}
+    private let preview: GroundShot
+    private let blur: NSSegmentedControl
+
+    static func column(_ views: [NSView], spacing: CGFloat) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = spacing
+        return stack
+    }
+
+    init(_ sections: [(String, NSView)], preview: GroundShot, blur: NSSegmentedControl, buttons: [NSButton], byItself: Bool) {
+        self.byItself = byItself
+        self.preview = preview
+        self.blur = blur
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 496, height: 600), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        title = "Set Up ClaudeTTY"
+        styleMask.insert(.fullSizeContentView)
+        titlebarAppearsTransparent = true
+        titleVisibility = .hidden
+        isReleasedWhenClosed = false
+        let glyphs = ["Theme": "circle.lefthalf.filled", "Icons": "sparkles", "Background": "square.2.layers.3d", "Claude": "terminal"]
+        let stack = Self.column(sections.map { title, view in
+            let glyph = NSImageView(image: NSImage(systemSymbolName: glyphs[title]!, accessibilityDescription: nil)!)
+            glyph.symbolConfiguration = .init(pointSize: 15, weight: .semibold)
+            glyph.contentTintColor = Spark.orange
+            return Self.column([NSStackView(views: [glyph, Self.label(title, 17, .bold)]), view], spacing: 10)
+        }, spacing: 24)
+        stack.edgeInsets = NSEdgeInsets(top: 36, left: 24, bottom: 24, right: 24)
+        let icon = NSImageView(image: NSApp.applicationIconImage)
+        icon.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 56).isActive = true
+        let words = Self.column([Self.label(byItself ? "Welcome to ClaudeTTY" : title, 22, .bold), Self.label("Change any of this later from the menu bar.", 13, .regular, .secondaryLabelColor)], spacing: 2)
+        let header = NSStackView(views: [icon, words])
+        header.spacing = 12
+        stack.insertArrangedSubview(header, at: 0)
+        let rule = NSBox(), bar = NSStackView(views: [NSView()] + buttons), content = NSVisualEffectView()
+        content.material = .sidebar
+        content.state = .active
+        rule.boxType = .separator
+        bar.edgeInsets = NSEdgeInsets(top: 12, left: 24, bottom: 12, right: 24)
+        for child in [stack, rule, bar] {
+            content.addSubview(child)
+            child.translatesAutoresizingMaskIntoConstraints = false
+        }
+        NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo: content.topAnchor), stack.leadingAnchor.constraint(equalTo: content.leadingAnchor), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor), stack.widthAnchor.constraint(equalToConstant: 496),
+                                     rule.topAnchor.constraint(equalTo: stack.bottomAnchor), rule.leadingAnchor.constraint(equalTo: content.leadingAnchor), rule.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                                     bar.topAnchor.constraint(equalTo: rule.bottomAnchor), bar.leadingAnchor.constraint(equalTo: content.leadingAnchor), bar.trailingAnchor.constraint(equalTo: content.trailingAnchor), bar.bottomAnchor.constraint(equalTo: content.bottomAnchor)])
+        contentView = content
+        setContentSize(content.fittingSize)
+        center()
+    }
+
+    @objc func windowShouldClose(_ sender: NSWindow) -> Bool {
+        finish(byItself)
+        return false
+    }
+
+    override func cancelOperation(_ sender: Any?) { performClose(nil) }
+
+    func relook(blur on: Bool) {
+        preview.paint()
+        blur.isEnabled = on
+    }
+
+    static func label(_ text: String, _ size: CGFloat, _ weight: NSFont.Weight = .regular, _ color: NSColor = .labelColor) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: size, weight: weight)
+        label.textColor = color
+        return label
+    }
+
+    static func line(_ title: String, _ control: NSView) -> NSView {
+        let line = NSStackView(views: [label(title, 13), NSView(), control])
+        line.widthAnchor.constraint(equalToConstant: 448).isActive = true
+        return line
+    }
+}
+
+final class Tile: NSButton {
+    var picked: Bool { didSet { restyle() } }
+    private let ring = NSView()
+    private let name: NSTextField
+    private let pick: () -> Void
+
+    init(_ title: String, _ picture: NSView, picked: Bool, height: CGFloat, pick: @escaping () -> Void) {
+        self.picked = picked
+        self.pick = pick
+        name = Guide.label(title, 12)
+        super.init(frame: NSRect(x: 0, y: 0, width: 140, height: height + 8 + 6 + name.fittingSize.height))
+        self.title = ""
+        isBordered = false
+        target = self
+        action = #selector(fire)
+        setAccessibilityLabel(title)
+        ring.frame = NSRect(x: 0, y: 0, width: 140, height: height + 8)
+        ring.wantsLayer = true
+        ring.layer?.cornerRadius = 9
+        picture.frame = NSRect(x: 4, y: 4, width: 132, height: height)
+        picture.wantsLayer = true
+        picture.layer?.cornerRadius = 6
+        picture.layer?.masksToBounds = true
+        ring.addSubview(picture)
+        name.alignment = .center
+        name.frame = NSRect(x: -20, y: height + 14, width: 180, height: name.fittingSize.height)
+        addSubview(ring)
+        addSubview(name)
+        restyle()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override var intrinsicContentSize: NSSize { frame.size }
+    override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
+    override func isAccessibilitySelected() -> Bool { picked }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        restyle()
+    }
+
+    @objc private func fire() {
+        for case let tile as Tile in superview?.subviews ?? [] { tile.picked = tile === self }
+        pick()
+    }
+
+    private func restyle() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            ring.layer?.borderWidth = picked ? 2.5 : 1
+            ring.layer?.borderColor = (picked ? NSColor.controlAccentColor : .separatorColor).cgColor
+        }
+        name.font = .systemFont(ofSize: 12, weight: picked ? .semibold : .regular)
+        name.textColor = picked ? .labelColor : .secondaryLabelColor
+    }
+
+    static func row(_ items: [(String, NSView)], picked: Int?, height: CGFloat, pick: @escaping (Int) -> Void) -> NSStackView {
+        let row = NSStackView(views: items.enumerated().map { index, item in Tile(item.0, item.1, picked: index == picked, height: height) { pick(index) } })
+        row.spacing = 14
+        row.alignment = .top
+        return row
+    }
+}
+
+final class ThemeShot: NSView {
+    private let look: String
+
+    init(_ look: String) {
+        self.look = look
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        window(dark: look == "dark")
+        guard look == "system" else { return }
+        let context = NSGraphicsContext.current!.cgContext
+        context.addLines(between: [NSPoint(x: bounds.maxX, y: bounds.maxY), NSPoint(x: bounds.maxX, y: 0), .zero])
+        context.clip()
+        window(dark: true)
+    }
+
+    private func window(dark: Bool) {
+        let top = bounds.height, side: CGFloat = 38, grey = NSColor(white: dark ? 0.36 : 0.62, alpha: 1)
+        NSColor(white: dark ? 0.17 : 0.87, alpha: 1).setFill()
+        bounds.fill()
+        NSColor(white: dark ? 0 : 1, alpha: 1).setFill()
+        NSRect(x: side, y: 0, width: bounds.width - side, height: top).fill()
+        grey.setFill()
+        NSRect(x: side + 5, y: top - 5.75, width: 18, height: 2.5).fill()
+        for (index, color) in [NSColor.systemRed, .systemYellow, .systemGreen].enumerated() {
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 4 + CGFloat(index) * 5.5, y: top - 6.5, width: 4, height: 4)).fill()
+        }
+        for index in 0..<5 {
+            let y = top - 22 - CGFloat(index) * 15
+            if index == 1 {
+                NSColor.controlAccentColor.setFill()
+                NSBezierPath(roundedRect: NSRect(x: 3, y: y - 3, width: side - 6, height: 12), xRadius: 3, yRadius: 3).fill()
+            }
+            (index == 1 ? NSColor.white : grey).setFill()
+            NSRect(x: 6, y: y + 4, width: 16, height: 2.5).fill()
+            (index == 1 ? NSColor.white.withAlphaComponent(0.6) : grey.withAlphaComponent(0.6)).setFill()
+            NSRect(x: 6, y: y, width: 24, height: 2).fill()
+        }
+        for (index, width) in [70, 52, 0, 64, 44, 0, 58].enumerated() where width > 0 {
+            let y = top - 18 - CGFloat(index) * 8
+            Spark.orange.setFill()
+            NSBezierPath(ovalIn: NSRect(x: side + 5, y: y, width: 3, height: 3)).fill()
+            grey.setFill()
+            NSRect(x: side + 11, y: y + 0.5, width: CGFloat(width), height: 2).fill()
+        }
+    }
+}
+
+final class IconShot: NSVisualEffectView {
+    init(_ lines: [[(String, String?)]], scale: CGFloat, picks: [String: String], height: CGFloat) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 132, height: height))
+        material = .sidebar
+        blendingMode = .behindWindow
+        let tint = NSView(frame: bounds)
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.18).cgColor
+        addSubview(tint)
+        let side = 13 * scale
+        for (row, line) in lines.enumerated() {
+            for (column, state) in line.enumerated() {
+                let x = bounds.width * (CGFloat(column) + 0.5) / CGFloat(line.count), y = bounds.height * (CGFloat(lines.count - row) - 0.5) / CGFloat(lines.count)
+                let holder = NSView(frame: NSRect(x: x - side / 2, y: y - side / 2, width: side, height: side))
+                holder.bounds.size = NSSize(width: 13, height: 13)
+                let spark = Spark(state.0, phase: column, selected: false, key: "guide \(picks) \(row) \(column)", mark: state.1, picks: picks)
+                spark.frame = holder.bounds
+                holder.addSubview(spark)
+                addSubview(holder)
+            }
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
+final class GroundShot: NSView {
+    private let ground = NSView()
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 448, height: 124))
+        widthAnchor.constraint(equalToConstant: 448).isActive = true
+        heightAnchor.constraint(equalToConstant: 124).isActive = true
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.masksToBounds = true
+        let scene = NSImageView(image: NSImage(size: bounds.size, flipped: true) { rect in
+            NSGradient(colors: [NSColor(srgbRed: 0.23, green: 0.51, blue: 0.96, alpha: 1), NSColor(srgbRed: 0.93, green: 0.28, blue: 0.6, alpha: 1), NSColor(srgbRed: 0.98, green: 0.62, blue: 0.1, alpha: 1)])!.draw(in: rect, angle: -20)
+            for (index, (name, color)) in [("Standup", NSColor.systemGreen), ("Design review", .systemPurple), ("Lunch", .systemOrange), ("1:1 with Sam", .systemTeal), ("Ship 1.2", .systemRed), ("Gym", .systemIndigo)].enumerated() {
+                let event = NSRect(x: 14 + CGFloat(index % 3) * 146, y: 12 + CGFloat(index / 3) * 56 + CGFloat(index % 2) * 10, width: 128, height: 40)
+                NSColor(white: 1, alpha: 0.9).setFill()
+                NSBezierPath(roundedRect: event, xRadius: 6, yRadius: 6).fill()
+                color.setFill()
+                NSBezierPath(roundedRect: NSRect(x: event.minX, y: event.minY, width: 5, height: event.height), xRadius: 2.5, yRadius: 2.5).fill()
+                (name as NSString).draw(at: NSPoint(x: event.minX + 12, y: event.minY + 11), withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: color])
+            }
+            return true
+        })
+        for view in [scene, ground] {
+            view.frame = bounds
+            view.autoresizingMask = [.width, .height]
+        }
+        ground.wantsLayer = true
+        let mono = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), quiet = NSColor.secondaryLabelColor
+        let text = NSMutableAttributedString()
+        for (part, color) in [("> ", quiet), ("the sidebar feels cramped when it's narrow\n\n", .labelColor), ("● ", Spark.orange), ("I'll check how a row lays out its title.\n\n", .labelColor),
+                              ("● ", Spark.orange), ("Read", Spark.orange), ("(Sources/ClaudeTTY/ClaudeTTY.swift)\n", .labelColor), ("  ⎿  Read 412 lines", quiet)] as [(String, NSColor)] {
+            text.append(NSAttributedString(string: part, attributes: [.font: mono, .foregroundColor: color]))
+        }
+        let lines = NSTextField(labelWithAttributedString: text)
+        lines.frame = NSRect(x: 12, y: 12, width: 424, height: 100)
+        addSubview(scene)
+        addSubview(ground)
+        addSubview(lines)
+        paint()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func paint() { ClaudeTTY.ground(ground.layer!, light: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua) }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        paint()
+    }
 }

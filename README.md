@@ -6,34 +6,34 @@
 
 <img src="media/hero.png" width="900" alt="ClaudeTTY with five groups in the sidebar and Claude working in two tabs">
 
-Features
---------
+Looks (top tier, animated throughout)
+-------------------------------------
 
-<img src="media/survive.gif" width="50%" align="right" alt="The app is killed and reopened with every tab still running">
+<img src="media/survive.gif" width="50%" align="right" hspace="16" alt="The app is killed and reopened with every tab still running">
 
 ### Persistent Tabs
 
-Every tab runs in a [zmx](https://github.com/neurosnap/zmx) session outside the app, like tmux without the tmux. Quit it, crash it or update it, and every Claude is still mid-edit when it opens again. Same when Claude Code updates itself. The Claudes you already had open stay up and still get tracked. After a reboot each tab comes back in its group with `claude --resume`.
+Every tab runs in a [zmx](https://github.com/neurosnap/zmx) session outside the app, like tmux without the tmux. Quit it, crash it or update it, and every Claude is still mid-edit when you open it again. Same when Claude Code updates itself. The Claudes you already had open stay up and still get tracked. After a reboot I get each tab back in its group with `claude --resume`.
 
 <br clear="all"><br>
 
-<img src="media/dots.gif" width="50%" align="left" alt="The tab dots for each activity">
+<img src="media/dots.gif" width="50%" align="left" hspace="16" alt="Dots and Clawd for each activity">
 
-### The dots
+### Dots and Clawd
 
-Each tab's dots move differently depending on what its Claude is doing and turn amber when it's waiting on you, so with 4 Claudes in a group you can tell which one needs you. Tabs also show how much context they've used.
+Pick Dots or Clawd in View > Icons. When a Claude needs you its tab turns amber, so with 4 Claudes in a group you can tell which one it is. You can also see how much context each tab has used.
 
 <br clear="all"><br>
 
-<img src="media/panes.png" width="50%" align="right" alt="A group split into panes, each with its own tab bar">
+<img src="media/panes.png" width="50%" align="right" hspace="16" alt="A group split into panes, each with its own tab bar">
 
 ### Groups and panes
 
-I keep each project in a group and its Claudes as tabs. Groups can be colored, pinned and put in folders. Splits and shortcuts are the ones you know from iTerm, and <kbd>⌘</kbd>-click opens links and file paths even while Claude Code has the mouse.
+I keep each project in a group and its Claudes as tabs. I color and pin groups, and the splits and shortcuts are the ones you know from iTerm, and <kbd>⌘</kbd>-click opens links and file paths even while Claude Code has the mouse.
 
 <br clear="all"><br>
 
-<img src="media/mod.gif" width="50%" align="left" alt="Editing the source, running install.sh, and the open app switching to the new build">
+<img src="media/mod.gif" width="50%" align="left" hspace="16" alt="Editing the source, running install.sh, and the open app switching to the new build">
 
 ### Modding it
 
@@ -41,42 +41,43 @@ The whole app is about 5,500 lines of Swift in three files, so it's pretty easy 
 
 <br clear="all"><br>
 
-<img src="media/sidebar.gif" width="50%" align="right" alt="Dragging the sidebar edge shut, open again and shut again in one drag">
+<img src="media/sidebar.gif" width="50%" align="right" hspace="16" alt="Dragging a tab into place, the pane buttons fading in, and the sidebar dragged shut and open again">
 
-### Dragging the sidebar shut
+### Animations and polish
 
-Satisfying. <kbd>⌘</kbd><kbd>B</kbd> for less satisfaction but some more practicality.
+I made dragging tabs, groups and the sidebar feel right. Dragging the sidebar shut is pretty satisfying, or <kbd>⌘</kbd><kbd>B</kbd> for less satisfaction but some more practicality.
 
 <br clear="all"><br>
 
 Smaller Things I Like
 ---------------------
 
-- Click "3 agents" under a group and pick one, and that subagent's transcript opens in a pane right next to its Claude, live. Pretty fun to watch them work.
-- Drop a screenshot on a Claude tab and it attaches as `[Image #1]`, same as Claude Code's own paste, and other files go in as @ mentions. <kbd>⌘</kbd><kbd>V</kbd> on a copied image works too.
-- The menu bar icon shows you how many tabs want your input, so I close the window but can come back when I remember instead of being constantly bothered.
-- Idle groups show the last thing their Claude said and how long ago, which is usually enough for me to remember what I was even doing there.
-- The dots wait a quarter second before switching, so a Claude flying through a bunch of quick file reads doesn't turn into a strobe light.
-- <kbd>⌘</kbd><kbd>P</kbd> <kbd>↩</kbd> takes you back to the tab you were just in, basically <kbd>⌘</kbd><kbd>Tab</kbd> for tabs.
-- <kbd>⌘</kbd><kbd>⇧</kbd><kbd>T</kbd> reopens the tab you just closed, like in a browser, and if it had a Claude in it you get that same Claude back. Pretty handy when you close the wrong one.
-- Right-click a tab to schedule a message, like a prompt for when your limits reset.
-- If you answer a permission prompt from somewhere else, the notification goes away on its own instead of sitting there forever.
-- The close dialog lists what's still running in the tab and for how long.
+- Tabs sleep like Chrome's after 20 idle minutes, and wake into the same session.
+- A cold cache turns a sleeping Claude icy cyan. View > Keep Asleep Tabs Warm prevents it.
+- Right-click a tab for its model, effort and context.
+- The sidebar names the background command a Claude is waiting on.
+- Click "3 agents" under a group to watch a subagent work live.
+- Idle groups show their Claude's last message, so I remember what I was doing.
+- The dots wait a quarter second, so quick file reads don't turn into a strobe light.
+- The tab bar picks up vim's background color, or any app's.
+- <kbd>⌘</kbd>-click runs `~/.config/claudetty/open`, so files open in your editor.
+- <kbd>⌘</kbd><kbd>P</kbd> <kbd>↩</kbd> is basically <kbd>⌘</kbd><kbd>Tab</kbd> for tabs.
+- Right-click a tab to schedule a message for when your limits reset.
 
 Compared to cmux and Others
 ---------------------------
 
-| | ClaudeTTY | cmux | Superset | Warp | Wave | Ghostty |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| Tabs keep running after a quit or crash | ✅ | only through tmux | ✅ | ❌ | SSH only, opt-in | ❌ |
-| Shows what each Claude is doing | ✅ | a needs-attention ring | working and done | with its plugin | ❌ | ❌ |
-| Claude can run other tabs | ✅ | CLI and socket | CLI, MCP and SDK | ❌ | `wsh` CLI | ❌ |
-| Memory with one idle tab | 68 MB | 1,029 MB (15×) | 359 MB | 895 MB | 556 MB | 84 MB |
-| Idle CPU | 0.03% | 3.1% (103×) | 1.9% | 3.2% | 1.9% | 0.7% |
-| Launch to first window | 307 ms | 701 ms | 889 ms | 829 ms | 1,226 ms | 302 ms |
-| App size | 20 MB | 454 MB | 1.5 GB | 872 MB | 531 MB | 62 MB |
+| | ClaudeTTY | cmux | herdr | Superset | Warp | Wave | Ghostty |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Tabs keep running after a quit or crash | ✅ | only through tmux | until its server restarts | ✅ | ❌ | SSH only, opt-in | ❌ |
+| Shows what each Claude is doing | ✅ | a needs-attention ring | working and blocked | working and done | with its plugin | ❌ | ❌ |
+| Claude can run other tabs | ✅ | CLI and socket | CLI and socket | CLI, MCP and SDK | ❌ | `wsh` CLI | ❌ |
+| Memory with one idle tab | 68 MB | 1,029 MB (15×) | 109 MB | 359 MB | 895 MB | 556 MB | 84 MB |
+| Idle CPU | 0.03% | 3.1% (103×) | 0.9% | 1.9% | 3.2% | 1.9% | 0.7% |
+| Launch to first window | 307 ms | 701 ms | not timed | 889 ms | 829 ms | 1,226 ms | 302 ms |
+| App size | 20 MB | 454 MB | 86 MB | 1.5 GB | 872 MB | 531 MB | 62 MB |
 
-<sub>All on my M4 Pro (48 GB) with macOS 27.0 and one window with one tab. Launch is the median of 5, memory is Activity Monitor's footprint 20 s after launch (ClaudeTTY's includes the zmx process holding the tab) and CPU is over the 30 s after that. cmux 0.65.2, Superset 1.39.0, Warp 0.2026.10.14 and Wave 0.14.5 on fresh profiles, Ghostty 1.3.1. Without tmux, cmux reopens your layout and restarts Claude into its last conversation, but whatever was running is gone (<a href="https://github.com/manaflow-ai/cmux">cmux README</a>).</sub>
+<sub>All on my M4 Pro (48 GB) with macOS 27.0 and one window with one tab. Launch is the median of 5, memory is Activity Monitor's footprint 20 s after launch (ClaudeTTY's includes the zmx process holding the tab) and CPU is over the 30 s after that. cmux 0.65.2, Superset 1.39.0, Warp 0.2026.10.14 and Wave 0.14.5 on fresh profiles, Ghostty 1.3.1. herdr 0.9.5 runs inside your terminal, so its numbers are herdr plus Ghostty (herdr alone is 25 MB, 0.2% and 24 MB). Closing the terminal keeps its tabs running, but a server restart ends them (<a href="https://herdr.dev/docs/session-state/">herdr docs</a>). Without tmux, cmux reopens your layout and restarts Claude into its last conversation, but whatever was running is gone (<a href="https://github.com/manaflow-ai/cmux">cmux README</a>).</sub>
 
 Letting Claude Run Your Tabs
 ----------------------------
@@ -116,7 +117,7 @@ Limitations
 
 I think it's pretty much done, so apart from bugs and small niceties I won't be adding much. If you need something else there's probably a terminal tool for it, like [terminal-browser](https://terminal-browser.com/) for the web or [ttt](https://github.com/eugenioenko/ttt) (I used vim anw). And since ClaudeTTY is fast they run better here than in a lot of dedicated GUI apps, even cmux. Ask your agent to add the functionality you need for those tools.
 
-Pull requests are off for the same reason. If you want it to do something else, fork it and change it. Bug reports and cool feature requests that land with my philosophy in Issues are welcome.
+I turned pull requests off for the same reason. If you want it to do something else, fork it and change it. I'm happy to see bug reports and cool feature requests that land with my philosophy in Issues.
 
 License
 -------

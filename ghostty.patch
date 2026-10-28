@@ -1,8 +1,34 @@
+diff --git a/include/ghostty.h b/include/ghostty.h
+index 518af3ff2..b700514d1 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -843,6 +843,8 @@ typedef enum {
+   GHOSTTY_ACTION_COLOR_KIND_FOREGROUND = -1,
+   GHOSTTY_ACTION_COLOR_KIND_BACKGROUND = -2,
+   GHOSTTY_ACTION_COLOR_KIND_CURSOR = -3,
++  GHOSTTY_ACTION_COLOR_KIND_EDGE = -4,
++  GHOSTTY_ACTION_COLOR_KIND_EDGE_DEFAULT = -5,
+ } ghostty_action_color_kind_e;
+ 
+ // apprt.action.ColorChange
 diff --git a/src/Surface.zig b/src/Surface.zig
-index 8eddc14c8..2a2e09363 100644
+index 8eddc14c8..60b482268 100644
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
-@@ -1807,6 +1807,15 @@ pub fn updateConfig(
+@@ -1044,6 +1044,12 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
+             );
+         },
+ 
++        .edge => |edge| _ = try self.rt_app.performAction(
++            .{ .surface = self },
++            .color_change,
++            .{ .kind = if (edge.explicit) .edge else .edge_default, .r = edge.color.r, .g = edge.color.g, .b = edge.color.b },
++        ),
++
+         .set_mouse_shape => |shape| {
+             log.debug("changing mouse shape: {}", .{shape});
+             _ = try self.rt_app.performAction(
+@@ -1807,6 +1813,15 @@ pub fn updateConfig(
          break :font_size size;
      });
  
@@ -18,7 +44,7 @@ index 8eddc14c8..2a2e09363 100644
      // We need to store our configs in a heap-allocated pointer so that
      // our messages aren't huge.
      var renderer_message = try rendererpkg.Message.initChangeConfig(self.alloc, config);
-@@ -2738,7 +2747,7 @@ pub fn keyCallback(
+@@ -2738,7 +2753,7 @@ pub fn keyCallback(
          // 1. mouse reporting is off
          // OR
          // 2. mouse reporting is on and we are not reporting shift to the terminal
@@ -27,7 +53,7 @@ index 8eddc14c8..2a2e09363 100644
              (self.mouse.mods.shift and !self.mouseShiftCapture(false)))
          {
              // Refresh our link state
-@@ -3819,6 +3828,9 @@ pub fn mouseButtonCallback(
+@@ -3819,6 +3834,9 @@ pub fn mouseButtonCallback(
      // bottleneck.
      const shift_capture = self.mouseShiftCapture(true);
  
@@ -37,7 +63,7 @@ index 8eddc14c8..2a2e09363 100644
      // Shift-click continues the previous mouse state if we have a selection.
      // cursorPosCallback will also do a mouse report so we don't need to do any
      // of the logic below.
-@@ -4627,7 +4639,7 @@ pub fn cursorPosCallback(
+@@ -4627,7 +4645,7 @@ pub fn cursorPosCallback(
      if ((over_link or
          self.mouse.link_point == null or
          (self.mouse.link_point != null and !self.mouse.link_point.?.eql(pos_vp))) and
@@ -46,6 +72,41 @@ index 8eddc14c8..2a2e09363 100644
              (self.mouse.mods.shift and !self.mouseShiftCapture(false))))
      {
          // If we were previously over a link, we always update. We do this so that if the text
+diff --git a/src/apprt/action.zig b/src/apprt/action.zig
+index 7e902e563..a1f38af70 100644
+--- a/src/apprt/action.zig
++++ b/src/apprt/action.zig
+@@ -891,6 +891,8 @@ pub const ColorKind = enum(c_int) {
+     foreground = -1,
+     background = -2,
+     cursor = -3,
++    edge = -4,
++    edge_default = -5,
+ 
+     // 0+ values indicate a palette index
+     _,
+diff --git a/src/apprt/surface.zig b/src/apprt/surface.zig
+index 51da3374a..f692bfb85 100644
+--- a/src/apprt/surface.zig
++++ b/src/apprt/surface.zig
+@@ -12,6 +12,8 @@ const MessageData = @import("../datastruct/main.zig").MessageData;
+ 
+ /// The message types that can be sent to a single surface.
+ pub const Message = union(enum) {
++    pub const Edge = struct { color: terminal.color.RGB, explicit: bool };
++
+     /// Represents a write request. Magic number comes from the max size
+     /// we want this union to be.
+     pub const WriteReq = MessageData(u8, 255);
+@@ -147,6 +149,8 @@ pub const Message = union(enum) {
+     /// The scrollbar state changed for the surface.
+     scrollbar: terminal.Scrollbar,
+ 
++    edge: Edge,
++
+     /// Search progress update
+     search_total: ?usize,
+ 
 diff --git a/src/config/url.zig b/src/config/url.zig
 index 463ea9bfc..3f39b8071 100644
 --- a/src/config/url.zig
@@ -75,6 +136,62 @@ index 463ea9bfc..3f39b8071 100644
  
  test "url regex" {
      const testing = std.testing;
+diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
+index 9247454db..ca1c3e6c2 100644
+--- a/src/renderer/Metal.zig
++++ b/src/renderer/Metal.zig
+@@ -170,6 +170,7 @@ pub fn loopEnter(self: *Metal) void {
+ }
+ 
+ fn displayCallback(renderer: *Renderer) align(8) void {
++    if (!renderer.visible) return;
+     renderer.drawFrame(true) catch |err| {
+         log.warn("Error drawing frame in display callback, err={}", .{err});
+     };
+diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+index 2a81f42b4..c99909a91 100644
+--- a/src/renderer/generic.zig
++++ b/src/renderer/generic.zig
+@@ -130,6 +130,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+         scrollbar: terminal.Scrollbar,
+         scrollbar_dirty: bool,
+ 
++        edge: ?apprt.surface.Message.Edge = null,
++
+         /// Tracks the last bottom-right pin of the screen to detect new output.
+         /// When the final line changes (node or y differs), new content was added.
+         /// Used for scroll-to-bottom on output feature.
+@@ -2794,6 +2796,21 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             // });
+         }
+ 
++        fn reportEdge(self: *Self, row: terminal.page.Row, cells: []const terminal.page.Cell, styles: []const terminal.Style) void {
++            const state = &self.terminal_state;
++            const default = state.colors.background;
++            const filled = cells.len > 0 and !rowNeverExtendBg(row, cells, styles, &state.colors.palette, default);
++            var ends: [2]?terminal.color.RGB = .{ null, null };
++            if (filled) for (&ends, [2]usize{ 0, cells.len - 1 }) |*end, x| {
++                const style: terminal.Style = if (cells[x].hasStyling()) styles[x] else .{};
++                end.* = style.bg(&cells[x], &state.colors.palette);
++            };
++            const explicit = filled and ends[0].?.eql(ends[1].?);
++            const edge: apprt.surface.Message.Edge = .{ .color = if (explicit) ends[0].? else default, .explicit = explicit };
++            if (self.edge) |last| if (last.explicit == edge.explicit and last.color.eql(edge.color)) return;
++            if (self.surface_mailbox.push(.{ .edge = edge }, .instant) > 0) self.edge = edge;
++        }
++
+         fn rebuildRow(
+             self: *Self,
+             y: terminal.size.CellCountInt,
+@@ -2842,6 +2859,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                 },
+             }
+ 
++            if (y == 0) self.reportEdge(row, cells_raw[0..cells_len], cells_style[0..cells_len]);
++
+             // Iterator of runs for shaping.
+             var run_iter_opts: font.shape.RunOptions = .{
+                 .grid = self.font_grid,
 diff --git a/src/termio/stream_handler.zig b/src/termio/stream_handler.zig
 index 27e06dcb7..4b5fe22ff 100644
 --- a/src/termio/stream_handler.zig

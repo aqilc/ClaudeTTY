@@ -1,8 +1,10 @@
 #!/bin/zsh
 set -euo pipefail
-APP=${APP:-~/Applications/ClaudeTTY.app}
+APP=${APP:-/Applications/ClaudeTTY.app}
 cd ${0:A:h}
-SIGN=${CLAUDETTY_SIGN:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: .*\)"/\1/p' | head -1)}
+IDS=$(security find-identity -v -p codesigning)
+SIGN=${CLAUDETTY_SIGN:-$(sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' <<<$IDS | head -1)}
+SIGN=${SIGN:-$(sed -n 's/.*"\(Apple Development: .*\)"/\1/p' <<<$IDS | head -1)}
 if [[ -z $SIGN ]]; then
   SIGN="ClaudeTTY Local"
   if ! security find-certificate -c "$SIGN" >/dev/null 2>&1; then
@@ -18,6 +20,7 @@ rm -rf "${APP:?}.new" "${APP:?}.old"; mkdir -p $APP.new/Contents/MacOS
 cp .build/release/ClaudeTTY $APP.new/Contents/MacOS/
 D=~/Library/Caches/claudetty-deps; mkdir -p $APP.new/Contents/{Helpers,Resources}
 cp $D/zmx/zmx $APP.new/Contents/Helpers/; cp -R $D/ghostty/zig-out/share/{ghostty,terminfo} $APP.new/Contents/Resources/
+strip -x $APP.new/Contents/MacOS/ClaudeTTY $APP.new/Contents/Helpers/zmx
 I=$D/icon-$(shasum icon.swift | cut -c1-12).icns
 [[ -f $I ]] || { rm -rf $D/icon.iconset; swift icon.swift $D/icon.iconset && iconutil -c icns $D/icon.iconset -o $I; }
 cp $I $APP.new/Contents/Resources/ClaudeTTY.icns
@@ -25,7 +28,7 @@ M=$APP.new/Contents/Resources/plugin; mkdir -p $M/.claude-plugin; cp -R plugin $
 print '{"name":"claudetty","owner":{"name":"ClaudeTTY"},"plugins":[{"name":"claudetty","source":"./claudetty"}]}' > $M/.claude-plugin/marketplace.json
 plutil -replace version -string $(cd plugin && find . -type f | sort | xargs cat | shasum | cut -c1-12) $M/claudetty/.claude-plugin/plugin.json
 P=$APP.new/Contents/Info.plist; plutil -create xml1 $P
-for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.1.0 CFBundleVersion 2 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
+for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.0 CFBundleVersion 3 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
 [[ -n ${CLAUDETTY_RELEASE-} ]] || plutil -insert ClaudeTTYSource -string $PWD $P
 for k in AppBundles AppData AppleEvents AppleMusic AudioCapture BluetoothAlways BluetoothWhileInUse Calendars CalendarsFullAccess CalendarsWriteOnlyAccess \
   Camera Contacts DesktopFolder DocumentsFolder DownloadsFolder FaceID FileProviderDomain FileProviderPresence FinancialData FocusStatus HomeKit LocalNetwork \

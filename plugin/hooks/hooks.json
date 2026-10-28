@@ -63,6 +63,16 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" send",
+            "timeout": 150
+          }
+        ]
+      },
+      {
         "matcher": "PushNotification",
         "hooks": [
           {

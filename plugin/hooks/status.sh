@@ -1,9 +1,27 @@
 #!/bin/sh
+dir=${CLAUDETTY_PROBE:+$CLAUDETTY_PROBE/status}; dir=${dir:-"$HOME/Library/Caches/claudetty/status"}
+if [ "$1" = send ]; then
+  to=$(jq -r '.tool_input.to // empty')
+  app=${CLAUDETTY_PROBE:-"$HOME/Library/Application Support/ClaudeTTY"}
+  tab=$(jq -r --arg to "$to" 'first(.kept[]? | select(.labels.sleep != null and (.labels.sleep == $to or .name == $to))) | "\(.group)\t\(.name)"' "$app/state.json" 2>/dev/null)
+  [ -n "$tab" ] || exit 0
+  group=${tab%%"	"*} tab=${tab#*"	"}
+  ct=$(command -v ct) || ct="$HOME/.local/bin/ct"
+  "$ct" "$group" "$tab" >/dev/null 2>&1
+  i=0
+  while [ $i -lt 240 ]; do
+    for f in $(grep -lF "\"name\":\"$to\"" "$HOME"/.claude/sessions/*.json 2>/dev/null); do
+      jq -r '"\(.pid) \(.messagingSocketPath)"' "$f" | { read -r pid sock; kill -0 "$pid" 2>/dev/null && [ -S "$sock" ]; } && [ "$(cat "$dir/$tab" 2>/dev/null)" = idle ] && exit 0
+    done
+    sleep 0.5; i=$((i+1))
+  done
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' "$(jq -n --arg r "$to was asleep in ClaudeTTY tab $tab and hasn't woken within 2 min. Retry the SendMessage." '$r')"
+  exit 0
+fi
 [ -n "$ZMX_SESSION" ] || exit 0
 input=$(cat)
 [ "$1" = working ] && printf %s "$input" | jq -e 'has("agent_id")' >/dev/null 2>&1 && exit 0
 case "$1" in idle|agent|"") event=$(printf %s "$input" | jq -r .hook_event_name);; esac
-dir="$HOME/Library/Caches/claudetty/status"
 [ -d "$dir" ] || mkdir -p "$dir"
 status=; { read -r status < "$dir/$ZMX_SESSION"; } 2>/dev/null
 if [ "$1" = notify ]; then
@@ -18,14 +36,18 @@ fi
 case "$event/$1" in SessionStart/*|SessionEnd/*|Stop/*|SubagentStart/*|SubagentStop/*|*/working) ;; *) [ "$status" = "$1" ] && exit 0;; esac
 case "$1" in working) line=Thinking;; action|waiting)
   [ "$1" = action ] && [ "$status" = waiting ] && exit 0
-  line=$(printf %s "$input" | jq -j --arg kind "$1" '.tool_name as $tool | (if $kind == "action" and (.tool_name | IN("AskUserQuestion", "ExitPlanMode")) then empty
-    elif .hook_event_name == "PermissionRequest" then "allow \(.tool_name)"
+  line=$(printf %s "$input" | jq -j --arg kind "$1" '.tool_name as $tool | (.tool_input.command // "" | sub("^\\s*cd [^;&|]*(;|&&)\\s*"; "")) as $run
+    | (if $tool != "Bash" then $tool elif $run | test("^(rg|grep|fd|find|mdfind|ls|tree|\\S*/map)\\b") then "Grep" elif $run | test("^(cat|head|tail|sed -n|less|bat)\\b") then "Read" else $tool end) as $dots | (if $kind == "action" and (.tool_name | IN("AskUserQuestion", "ExitPlanMode")) then empty
+    elif .hook_event_name == "PermissionRequest" then (if .tool_name == "Bash" then .tool_input.description // "" | rtrimstr(".")
+      elif (.tool_input.file_path // "") != "" then "\(.tool_name) \(.tool_input.file_path | split("/") | last)"
+      elif .tool_name == "WebFetch" then "Fetch \(.tool_input.url // "" | split("/")[2] // "")"
+      else "" end | if . == "" then "Allow \($tool | split("__") | last)" else . end) + "?"
     elif .tool_name == "AskUserQuestion" then .tool_input.questions[0].question // "question"
-    elif .tool_name == "ExitPlanMode" then "review plan"
+    elif .tool_name == "ExitPlanMode" then "Approve the plan?"
     elif .hook_event_name == "Notification" then .message
     elif .tool_name == "Bash" then .tool_input.description // "Bash"
     elif (.tool_input.file_path // "") != "" then "\(.tool_name) \(.tool_input.file_path | split("/") | last)"
-    else .tool_name end | gsub("[\t\n]+"; " ")) + if $kind == "action" then "\t\($tool)" else "" end')
+    else .tool_name end | gsub("[\t\n]+"; " ")) + if $kind == "action" then "\t\($dots)" else "" end')
   [ -n "$line" ] || exit 0;;
 esac
 top=; { read -r top < "$dir/.$ZMX_SESSION.top"; } 2>/dev/null

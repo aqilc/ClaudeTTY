@@ -14,8 +14,10 @@ final class SurfaceView: NSView, NSTextInputClient {
     private(set) var focused = false
     var onFocus: (() -> Void)?
     var cellSize: CGSize = .zero
+    var edge: (color: NSColor, explicit: Bool)?
     var find: FindBar?
     var onDrop: ((NSPasteboard) -> [String])?
+    var tabItems: (() -> (claude: Bool, brief: String?, items: [NSMenuItem]))?
     private(set) var scrolled: UInt64 = 0
     private var restoring = false
     private var settle: DispatchWorkItem?
@@ -40,7 +42,7 @@ final class SurfaceView: NSView, NSTextInputClient {
             }
         }
         surface.map { ghostty_surface_set_focus($0, false) }
-        updateTrackingAreas()
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .inVisibleRect, .activeAlways], owner: self))
         registerForDraggedTypes([.fileURL, .URL, .string])
     }
 
@@ -145,33 +147,14 @@ final class SurfaceView: NSView, NSTextInputClient {
     }
 
 
-    override func updateTrackingAreas() {
-        trackingAreas.forEach { removeTrackingArea($0) }
-        addTrackingArea(NSTrackingArea(rect: frame, options: [.mouseEnteredAndExited, .mouseMoved, .inVisibleRect, .activeAlways], owner: self, userInfo: nil))
-    }
-
     private func mouseButton(_ state: ghostty_input_mouse_state_e, _ button: ghostty_input_mouse_button_e, _ event: NSEvent) -> Bool {
         guard let surface else { return false }
         mouseMoved(with: event)
         return ghostty_surface_mouse_button(surface, state, button, ghosttyMods(event.modifierFlags))
     }
 
-    private static func button(_ number: Int) -> ghostty_input_mouse_button_e {
-        switch number {
-        case 0: GHOSTTY_MOUSE_LEFT
-        case 1: GHOSTTY_MOUSE_RIGHT
-        case 2: GHOSTTY_MOUSE_MIDDLE
-        case 3: GHOSTTY_MOUSE_EIGHT
-        case 4: GHOSTTY_MOUSE_NINE
-        case 5: GHOSTTY_MOUSE_SIX
-        case 6: GHOSTTY_MOUSE_SEVEN
-        case 7: GHOSTTY_MOUSE_FOUR
-        case 8: GHOSTTY_MOUSE_FIVE
-        case 9: GHOSTTY_MOUSE_TEN
-        case 10: GHOSTTY_MOUSE_ELEVEN
-        default: GHOSTTY_MOUSE_UNKNOWN
-        }
-    }
+    private static let buttons = [GHOSTTY_MOUSE_LEFT, GHOSTTY_MOUSE_RIGHT, GHOSTTY_MOUSE_MIDDLE, GHOSTTY_MOUSE_EIGHT, GHOSTTY_MOUSE_NINE, GHOSTTY_MOUSE_SIX, GHOSTTY_MOUSE_SEVEN, GHOSTTY_MOUSE_FOUR, GHOSTTY_MOUSE_FIVE, GHOSTTY_MOUSE_TEN, GHOSTTY_MOUSE_ELEVEN]
+    private static func button(_ number: Int) -> ghostty_input_mouse_button_e { buttons.indices.contains(number) ? buttons[number] : GHOSTTY_MOUSE_UNKNOWN }
 
     override func mouseDown(with event: NSEvent) { _ = mouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, event) }
 
@@ -188,11 +171,11 @@ final class SurfaceView: NSView, NSTextInputClient {
     override func otherMouseUp(with event: NSEvent) { _ = mouseButton(GHOSTTY_MOUSE_RELEASE, Self.button(event.buttonNumber), event) }
 
     override func rightMouseDown(with event: NSEvent) {
-        if !mouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, event), let menu = menu(for: event) { popUp(menu, at: convert(event.locationInWindow, from: nil), in: self) }
+        if tabItems?().claude == true || !mouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, event), let menu = menu(for: event) { popUp(menu, at: convert(event.locationInWindow, from: nil), in: self) }
     }
 
     override func rightMouseUp(with event: NSEvent) {
-        if !mouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, event) { super.rightMouseUp(with: event) }
+        if tabItems?().claude != true, !mouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, event) { super.rightMouseUp(with: event) }
     }
 
     private func sendMousePos(_ x: Double, _ y: Double, _ event: NSEvent) {
@@ -202,8 +185,7 @@ final class SurfaceView: NSView, NSTextInputClient {
 
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
-        let pos = convert(event.locationInWindow, from: nil)
-        sendMousePos(pos.x, frame.height - pos.y, event)
+        mouseMoved(with: event)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -226,17 +208,11 @@ final class SurfaceView: NSView, NSTextInputClient {
         mouseMoved(with: event)
         let precise = event.hasPreciseScrollingDeltas
         let factor = precise ? 2.0 : 1.0
-        let momentum: Int32 = switch event.momentumPhase {
-        case .began: 1
-        case .stationary: 2
-        case .changed: 3
-        case .ended: 4
-        case .cancelled: 5
-        case .mayBegin: 6
-        default: 0
-        }
+        let momentum = Int32(Self.phases.firstIndex(of: event.momentumPhase).map { $0 + 1 } ?? 0)
         ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX * factor, event.scrollingDeltaY * factor, (precise ? 1 : 0) | momentum << 1)
     }
+
+    private static let phases: [NSEvent.Phase] = [.began, .stationary, .changed, .ended, .cancelled, .mayBegin]
 
     override func pressureChange(with event: NSEvent) {
         guard let surface else { return }
@@ -250,14 +226,7 @@ final class SurfaceView: NSView, NSTextInputClient {
             return
         }
         let translationModsGhostty = eventModifierFlags(ghostty_surface_key_translation_mods(surface, ghosttyMods(event.modifierFlags)))
-        var translationMods = event.modifierFlags
-        for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
-            if translationModsGhostty.contains(flag) {
-                translationMods.insert(flag)
-            } else {
-                translationMods.remove(flag)
-            }
-        }
+        let translationMods = event.modifierFlags.subtracting([.shift, .control, .option, .command]).union(translationModsGhostty)
         let translationEvent = translationMods == event.modifierFlags ? event : NSEvent.keyEvent(
             with: event.type, location: event.locationInWindow, modifierFlags: translationMods,
             timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
@@ -413,10 +382,7 @@ final class SurfaceView: NSView, NSTextInputClient {
     }
 
 
-    private func binding(_ action: String) {
-        guard let surface else { return }
-        _ = ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
-    }
+    func binding(_ action: String) { surface.map { _ = ghostty_surface_binding_action($0, action, UInt(action.utf8.count)) } }
 
     @IBAction func copy(_ sender: Any?) { binding("copy_to_clipboard") }
     @IBAction func paste(_ sender: Any?) { binding("paste_from_clipboard") }
@@ -427,7 +393,9 @@ final class SurfaceView: NSView, NSTextInputClient {
         window?.makeFirstResponder(self)
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for (title, action) in [("Copy", "copy_to_clipboard"), ("Paste", "paste_from_clipboard"), ("", ""), ("Split Right", "new_split:right"), ("Split Down", "new_split:down"), ("", ""), ("Find…", "start_search")] {
+        let tab = tabItems?()
+        if let brief = tab?.brief { menu.addItem(.sectionHeader(title: brief)) }
+        for (title, action) in [("Copy", "copy_to_clipboard"), ("Paste", "paste_from_clipboard"), ("", ""), ("Split Right", "new_split:right"), ("Split Down", "new_split:down"), ("", ""), ("Find…", "start_search")] where tab?.claude != true || title != "Copy" {
             guard !title.isEmpty else {
                 menu.addItem(.separator())
                 continue
@@ -437,6 +405,7 @@ final class SurfaceView: NSView, NSTextInputClient {
             item.representedObject = action
             item.isEnabled = action != "copy_to_clipboard" || surface.map(ghostty_surface_has_selection) == true
         }
+        if let items = tab?.items, !items.isEmpty { menu.items += [.separator()] + items }
         return menu
     }
 
