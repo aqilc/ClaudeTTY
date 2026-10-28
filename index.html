@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeTTY</title>
+<meta name="description" content="A Mac terminal for running as much Claude Code as you'll ever need.">
+<link rel="icon" href="media/icon.png">
+<style>
+  :root { color-scheme: light dark; --ground: #f3f1ef; --side: #dcd9d6; --ink: #1c1b1a; --muted: #6d6a66; --clawd: #d77757; --blue: #2f7cf6; --bar: #c9c5c1; --mono: ui-monospace, "SF Mono", Menlo, monospace; }
+  @media (prefers-color-scheme: dark) { :root { --ground: #151413; --side: #262423; --ink: #ecebea; --muted: #9a9692; --bar: #3d3a38; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 17px/1.55 -apple-system, BlinkMacSystemFont, sans-serif; }
+  a { color: inherit; }
+  img { max-width: 100%; height: auto; display: block; }
+  canvas { image-rendering: pixelated; display: block; }
+
+  /* the sidebar, drawn like ClaudeTTY's own: one row per section, the one you're reading selected and awake */
+  aside { position: fixed; inset: 0 auto 0 0; width: 250px; padding: 56px 10px; background: var(--side); }
+  aside a { display: block; padding: 9px 14px 10px; border-radius: 10px; text-decoration: none; transition: background-color 200ms ease; }
+  aside a:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+  aside a.on { background: var(--blue); color: #fff; }
+  aside b { display: block; font-size: 15px; }
+  aside canvas { width: 16px; height: 17px; margin: 3px 0 4px; }
+  aside span { display: block; font-size: 13px; color: color-mix(in srgb, var(--ink) 65%, transparent); }
+  aside span b { display: inline; font-size: 13px; color: var(--ink); }
+  aside a.on span, aside a.on span b { color: #fff; }
+  aside code { font: 12px var(--mono); }
+
+  main { margin-left: 250px; padding: 64px 56px 80px; max-width: 1060px; }
+  header { display: flex; align-items: flex-end; gap: 28px; }
+  header canvas { width: 96px; height: 102px; flex: none; cursor: pointer; }
+  h1 { margin: 0; font-size: 56px; line-height: 1; letter-spacing: -0.02em; }
+  h1 + p { margin: 10px 0 0; font-size: 20px; color: var(--muted); }
+  .download { display: flex; align-items: center; gap: 18px; margin: 32px 0 40px; flex-wrap: wrap; }
+  .download a { transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
+  .download a:active { transform: scale(.97); }
+  .download small { color: var(--muted); font-size: 14px; }
+  .hero { display: block; margin: 0 -24px; }
+
+  section { padding-top: 72px; }
+  h2 { margin: 0 0 16px; font: 600 13px var(--mono); color: var(--muted); }
+  h2::before { content: "~/"; }
+  p { max-width: 620px; }
+  .clip { display: grid; grid-template-columns: 250px 1fr; gap: 32px; margin: 40px 0; align-items: start; }
+  .clip p { margin: 0; }
+  .clip b { display: block; margin-bottom: 4px; }
+  .clip img { border-radius: 10px; }
+  kbd { font: 14px var(--mono); }
+
+  .bars { display: grid; grid-template-columns: 90px 1fr; gap: 10px 14px; align-items: center; max-width: 760px; font-size: 15px; }
+  .bars span { color: var(--muted); }
+  .bars span.us { color: var(--ink); font-weight: 600; }
+  .bars div { display: flex; align-items: center; gap: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .bars i { height: 14px; border-radius: 3px; background: var(--bar); transform-origin: left; transition: transform 900ms cubic-bezier(0.23, 1, 0.32, 1); }
+  .bars i.us { background: var(--clawd); }
+  .bars:not(.seen) i { transform: scaleX(0); }
+  .bars small { color: var(--muted); }
+  .stats { display: flex; gap: 40px; flex-wrap: wrap; margin: 32px 0 8px; }
+  .stats b { display: block; font-size: 32px; letter-spacing: -0.01em; }
+  .stats span { color: var(--muted); font-size: 15px; }
+  .note { font-size: 13px; color: var(--muted); }
+
+  pre { margin: 0 0 16px; padding: 18px 20px; max-width: 760px; overflow-x: auto; background: #1b1a19; color: #e6e4e1; border-radius: 10px; font: 14px/1.6 var(--mono); }
+  pre em { font-style: normal; color: #8b8782; }
+  footer { margin-top: 96px; font-size: 14px; color: var(--muted); }
+
+  @media (max-width: 1000px) {
+    aside { display: none; }
+    main { margin: 0; padding: 40px 20px 64px; }
+    header { flex-direction: column; align-items: flex-start; gap: 18px; }
+    header canvas { width: 72px; height: 77px; }
+    h1 { font-size: 40px; }
+    h1 + p { font-size: 17px; }
+    /* the window at phone width is 3 px text: crop to its sidebar and the start of the chat, edge to edge */
+    .hero, .clip img { margin: 0 -20px; }
+    .hero img { width: 100%; aspect-ratio: 39 / 44; object-fit: cover; object-position: 8% 45%; }
+    .clip { grid-template-columns: 1fr; gap: 14px; }
+    .clip img { max-width: none; width: calc(100% + 40px); aspect-ratio: 1; object-fit: cover; object-position: 2% 4%; border-radius: 0; }
+    /* the 4 x 2 dots grid splits into two 2 x 2 halves so the labels stay readable */
+    .clip:first-of-type img { aspect-ratio: 450 / 380; object-position: left; }
+    .clip:first-of-type img + img { display: block; object-position: right; }
+    .bars { grid-template-columns: 74px 1fr; }
+    .stats { display: grid; grid-template-columns: repeat(3, auto); gap: 16px; justify-content: start; }
+    .stats b { font-size: 26px; }
+    pre { margin: 0 -20px 16px; border-radius: 0; font-size: 13px; }
+    pre { white-space: pre-wrap; }
+    pre em { display: block; margin-bottom: 6px; }
+  }
+  @media (max-width: 1000px) {
+  /* B + C: each section opens with its sidebar row, which sticks while you read it */
+  main a.row { display: grid; grid-template-columns: 16px 1fr auto; column-gap: 12px; align-items: center; position: sticky; top: 8px; z-index: 1; margin: 0 -10px 18px; padding: 10px 14px; border-radius: 12px; background: var(--side); text-decoration: none; }
+  main a.row canvas { grid-row: 1 / 3; width: 16px; height: 17px; }
+  main a.row b { font-size: 15px; }
+  main a.row span { grid-column: 2; font-size: 13px; color: color-mix(in srgb, var(--ink) 65%, transparent); }
+  main a.row span b { font-size: 13px; color: var(--ink); }
+  main a.row code { grid-column: 3; grid-row: 1 / 3; font: 12px var(--mono); opacity: .7; }
+  main a.row.on { background: var(--blue); color: #fff; }
+  main a.row.on span, main a.row.on span b { color: #fff; }
+  main section h2 { display: none; }
+  #top > section { padding-top: 48px; }
+
+  main a.row { cursor: pointer; }
+  /* sections butt together, so the next row pushes the stuck one off with no gap, like iOS list headers */
+  section, #top > section { padding: 0; }
+  section::after { content: ''; display: block; height: 56px; }
+  main a.row { margin-bottom: 0; }
+  main a.row + * { margin-top: 18px; }
+  aside.open { display: block; inset: 8px 10px auto 10px; width: auto; padding: 6px; border-radius: 16px; z-index: 2; box-shadow: 0 0 0 100vmax rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.28); }
+  aside.open a { display: grid; grid-template-columns: 16px 1fr auto; column-gap: 12px; align-items: center; padding: 10px 14px; animation: down 220ms cubic-bezier(0.23, 1, 0.32, 1) both; }
+  aside.open a canvas { grid-row: 1 / 3; margin: 0; }
+  aside.open a span { grid-column: 2; }
+  aside.open a code { grid-column: 3; grid-row: 1 / 3; opacity: .7; }
+  @keyframes down { from { opacity: 0; transform: translateY(-8px); } }
+  }
+  @media (prefers-reduced-motion: reduce) { .bars i { transition: opacity 300ms ease; } .bars:not(.seen) i { transform: none; opacity: 0; } }
+
+  /* site-2: live marks, drawn from Marks.swift's own frames */
+  .m { display: inline-block; width: 18px; height: 18px; flex: none; color: var(--clawd); }
+  .m svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .m path { fill: currentColor; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; align-content: start; }
+  .pills > * { display: flex; align-items: center; gap: 8px; padding: 7px 13px 7px 10px; border-radius: 9px; background: var(--side); font-size: 15px; }
+  p.inline { max-width: 680px; margin: 40px 0; }
+  p.inline b { display: block; margin-bottom: 4px; }
+  .nw { white-space: nowrap; }
+  p.inline .m { width: 1.15em; height: 1.15em; vertical-align: -0.22em; }
+  .pills button { border: 0; color: var(--muted); font: inherit; cursor: pointer; transition: background-color 200ms ease, color 200ms ease; }
+  .pills button:hover { background: color-mix(in srgb, var(--ink) 9%, var(--side)); }
+  .pills button.on { background: color-mix(in srgb, var(--ink) 14%, var(--side)); color: var(--ink); }
+  .duo { display: grid; grid-template-columns: 132px 1fr; gap: 10px; align-items: center; }
+  .duo .morph { flex-direction: column; gap: 12px; }
+  .duo .morph span { font-size: 17px; }
+  .morph { display: flex; align-items: center; gap: 22px; }
+  .morph .m { width: 64px; height: 64px; }
+  .morph span { font-size: 22px; font-weight: 600; }
+  .player { display: grid; grid-template-columns: 250px 1fr; gap: 32px; margin: 40px 0; align-items: start; }
+  .player img { border-radius: 10px; }
+  .chapters { display: grid; gap: 4px; }
+  .chapters button { position: relative; display: grid; grid-template-rows: auto 0fr; padding: 10px 14px 12px; margin: 0 -14px; border: 0; border-radius: 10px; background: none; color: var(--muted); font: inherit; text-align: left; cursor: pointer; overflow: hidden; transition: grid-template-rows 250ms cubic-bezier(0.23, 1, 0.32, 1), background-color 200ms ease, color 200ms ease; }
+  .chapters button:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+  .chapters button.on { grid-template-rows: auto 1fr; color: var(--ink); }
+  .chapters span { overflow: hidden; margin-top: 4px; }
+  .chapters i { position: absolute; left: 14px; right: 14px; bottom: 4px; height: 2px; border-radius: 1px; background: var(--clawd); transform: scaleX(0); transform-origin: left; }
+  @media (max-width: 1250px) {
+    .duo { grid-template-columns: 1fr; }
+    .duo .morph { flex-direction: row; gap: 18px; }
+  }
+  @media (max-width: 1000px) {
+    .pills { gap: 6px; }
+    .pills > * { padding: 6px 11px 6px 8px; font-size: 14px; }
+    .morph { padding: 4px 0; }
+    .morph .m { width: 52px; height: 52px; }
+    .player { grid-template-columns: 1fr; gap: 14px; }
+    .player img { order: -1; }
+    .player img { margin: 0 -20px; max-width: none; width: calc(100% + 40px); aspect-ratio: 1; object-fit: cover; object-position: 2% 4%; border-radius: 0; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <a href="#top" class="on"><b>claudetty</b><canvas width="32" height="34"></canvas><span><b>why:</b> I took the file trees out</span><code>~/claudetty</code></a>
+  <a href="#looks"><b>looks</b><canvas width="32" height="34"></canvas><span><b>dots:</b> Thinking…</span><code>~/looks</code></a>
+  <a href="#numbers"><b>numbers</b><canvas width="32" height="34"></canvas><span><b>memory:</b> 68 MB</span><code>~/numbers</code></a>
+  <a href="#ct"><b>ct</b><canvas width="32" height="34"></canvas><span><b>for:</b> your Claude</span><code>~/ct</code></a>
+  <a href="#install"><b>install</b><canvas width="32" height="34"></canvas><span><b>dmg:</b> drag to Applications</span><code>~/install</code></a>
+</aside>
+
+<main>
+<div id="top">
+  <header>
+    <canvas id="clawd" width="96" height="102" title="Clawd"></canvas>
+    <div>
+      <h1>ClaudeTTY</h1>
+      <p>A Mac terminal for running as much Claude Code as you'll ever need.</p>
+    </div>
+  </header>
+
+  <div class="download">
+    <a href="https://github.com/aqilc/ClaudeTTY/releases/latest/download/ClaudeTTY.dmg"><img src="media/download.svg" width="236" height="52" alt="Download for Mac"></a>
+    <small>macOS 26 or later, Apple Silicon.<br>Free, and the source is on <a href="https://github.com/aqilc/ClaudeTTY">GitHub</a>.</small>
+  </div>
+
+  <picture class="hero">
+    <source srcset="media/window-dark.gif" media="(prefers-color-scheme: dark)">
+    <img src="media/window-light.gif" width="954" height="657" alt="ClaudeTTY over a sunset, blurring it, with Claude editing a file in one tab">
+  </picture>
+
+  <section>
+    <p>I made this because I let Claude write the code and only step in to make an edit now and then. You don't really need file trees or editors for that, so I took them out. Edits I'd make feel kind of worthless anyways, since Claude replaces them eventually.</p>
+    <p>I was using cmux before this. It's a good app, but it was buggy for me (crashed a lot, updates killed everything, and it'd pile up a bajillion unread notifications that didn't work properly). ClaudeTTY keeps the layout I liked, groups in a sidebar and tabs in the titlebar, and gets rid of the bloat. Every tab runs in the background so updates and crashes are headache-free.</p>
+  </section>
+</div>
+
+<section id="looks">
+  <h2>looks</h2>
+  <div class="clip"><p><b>See what every Claude is doing.</b> Each tab's dots move differently for thinking, writing, reading, searching and running code, or switch to Clawd and he acts it all out. A tab waiting on you turns amber.</p><div class="duo"><div class="morph"><i class="m" data-cycle="think,compose,write,read,search,code,default,blocked"></i><span>Thinking</span></div><div class="pills"><button data-to="think"><i class="m" data-m="think"></i>Thinking</button><button data-to="compose"><i class="m" data-m="compose"></i>Writing</button><button data-to="write"><i class="m" data-m="write"></i>Edit</button><button data-to="read"><i class="m" data-m="read"></i>Read</button><button data-to="search"><i class="m" data-m="search"></i>Search</button><button data-to="code"><i class="m" data-m="code"></i>Bash</button><button data-to="default"><i class="m" data-m="default"></i>Other tools</button><button data-to="blocked"><i class="m" data-m="blocked"></i>Waiting on you</button></div></div></div>
+  <div class="player">
+    <div class="chapters">
+      <button class="on" data-src="media/survive.gif" data-ms="6550"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every Claude keeps working.</span><i></i></button>
+      <button data-src="media/sidebar.gif" data-ms="6360"><b>Animations and polish.</b><span>Tabs and groups slide aside as you drag, and the sidebar slides like a native Mac one. Satisfying. <kbd>⌘B</kbd> for less satisfaction but some more practicality.</span><i></i></button>
+      <button data-src="media/mod.gif" data-ms="11650"><b>Change it yourself.</b><span>The whole app is about 5,500 lines of Swift in three files. Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
+    </div>
+    <img src="media/survive.gif" width="900" height="596" alt="The app is killed and reopened with every tab still running">
+  </div>
+</section>
+
+<section id="numbers">
+  <h2>numbers</h2>
+  <p>Memory with one idle tab, on my M4 Pro:</p>
+  <div class="bars">
+    <span class="us">ClaudeTTY</span><div><i class="us" style="width:5.1%"></i>68 MB</div>
+    <span>Ghostty</span><div><i style="width:6.4%"></i>84 MB</div>
+    <span>Superset</span><div><i style="width:27.2%"></i>359 MB</div>
+    <span>Wave</span><div><i style="width:42.1%"></i>556 MB</div>
+    <span>Warp</span><div><i style="width:67.9%"></i>895 MB</div>
+    <span>cmux</span><div><i style="width:78%"></i>1,029 MB <small>15×</small></div>
+  </div>
+  <div class="stats">
+    <div><b>307 ms</b><span>launch to first window</span></div>
+    <div><b>0.03%</b><span>idle CPU</span></div>
+    <div><b>20 MB</b><span>the whole app</span></div>
+  </div>
+  <p class="note">Median of 5 launches, one window with one tab. How I measured and the rest of the table is in the <a href="https://github.com/aqilc/ClaudeTTY#comparison-with-others-in-its-space">README</a>.</p>
+</section>
+
+<section id="ct">
+  <h2>ct</h2>
+  <p>ClaudeTTY installs a Claude Code plugin and a <code>ct</code> command, so the Claude in one tab can open, watch and steer the others.</p>
+<pre>ct list                          <em># every tab, its group, folder and Claude state</em>
+ct web dev bun run dev           <em># open tab "dev" in group "web", running a command</em>
+ct split dev right agent claude  <em># a new pane beside it with Claude in it</em>
+ct wait agent idle               <em># block until that Claude is done</em>
+zmx send agent "run the tests"   <em># type into it</em></pre>
+  <p>Don't even look at this, it's for your Claude. ClaudeTTY teaches it to Claude automatically in ~75 tokens.</p>
+</section>
+
+<section id="install">
+  <h2>install</h2>
+  <p><a href="https://github.com/aqilc/ClaudeTTY/releases/latest/download/ClaudeTTY.dmg">Download ClaudeTTY.dmg</a>, open it and drag ClaudeTTY to Applications. It updates itself after that.</p>
+  <p>On your phone or tablet, just use the Claude app. It's pretty good.</p>
+</section>
+
+<footer>
+  <p>ClaudeTTY is an independent project by <a href="https://github.com/aqilc">aqilc</a>. It isn't made by, affiliated with or endorsed by Anthropic. Claude Code is their tool, and ClaudeTTY just runs it. <a href="https://github.com/aqilc/ClaudeTTY/blob/main/LICENSE">CC BY-NC-SA 4.0</a>.</p>
+</footer>
+</main>
+
+<script>
+// Clawd, ported from Marks.swift's Clawd enum: 16 x 17 cells, the same poses and timings.
+const P = o => ({ lift: 0, dx: 0, eyes: 'open', arms: 'out', dim: 0, z: [], spark: [], ...o });
+const asleep = (o = {}) => P({ lift: -1, eyes: 'line', arms: 'tucked', dim: 1, ...o });
+const blink = [[0.05, P({ eyes: 'squint' })], [0.1, P({ eyes: 'line' })], [0.05, P({ eyes: 'squint' })]];
+const breath = [[0.15, P({ arms: 'up' })], [0.5, P({ lift: 1 })], [0.15, P({ lift: 1, arms: 'drop' })], [0.1, P({ arms: 'drop' })]];
+const rise = x => [[x, 0, 0.4], [x, -1, 0.9], [x + 1, -2, 1], [x + 1, -3, 0.45]].map(z => [0.25, asleep({ z: [z] })]);
+const idle = [[1, P()], ...breath, [0.9, P()], ...blink, [0.5, P()], ...breath, [1.2, P()], ...breath, [0.4, P()], ...blink, [0.1, P()], ...blink, [0.8, P()],
+  [0.6, P()], [0.1, P({ dx: -1, eyes: 'squint' })], [1, P({ dx: -1 })], [0.5, P()], [0.1, P({ dx: 1, eyes: 'squint' })], [1, P({ dx: 1 })], [0.4, P()], ...blink,
+  [0.5, P()], [0.15, P({ arms: 'up' })], [0.15, P({ lift: 1, eyes: 'squint', arms: 'up' })], [0.8, P({ lift: 1, eyes: 'line', arms: 'up' })], [0.15, P({ lift: 1, eyes: 'squint' })], [0.15, P({ arms: 'drop' })], [0.8, P()]];
+const fall = [[0.8, P()], ...blink, [0.4, P()], [0.4, P({ eyes: 'squint' })], [0.2, P()], [0.6, P({ eyes: 'squint' })], [0.2, P({ lift: -1, eyes: 'line' })], [0.1, P({ eyes: 'squint' })],
+  [0.5, P({ eyes: 'squint', arms: 'drop' })], [0.3, P({ eyes: 'line', arms: 'drop' })], [0.15, P({ lift: -1, eyes: 'line', arms: 'drop' })], ...[0.2, 0.4, 0.6, 0.8, 1].map(dim => [0.12, asleep({ dim })]), ...rise(4), [0.5, asleep()]];
+const sleep = [...rise(4), [0.3, asleep()], ...rise(9), [0.3, asleep()]];
+const wake = [[0.25, asleep({ z: [[4, -1, 0.6]] })], [0.25, asleep({ z: [[5, -2, 0.3]] })], ...[0.75, 0.5, 0.25].map(dim => [0.1, asleep({ dim, eyes: 'squint' })]),
+  [0.15, P({ lift: -1, arms: 'tucked' })], [0.1, P({ arms: 'drop' })], [0.1, P()], [0.1, P({ lift: 1, arms: 'drop', spark: [[14, 1, 0]] })], [0.2, P({ lift: 1, arms: 'up', spark: [[14, 1, 1]] })],
+  [0.2, P({ lift: 1, spark: [[14, 1, 2], [10, 0, 0]] })], [0.1, P({ arms: 'drop', spark: [[14, 1, 1], [15, 3, 0]] })], [0.2, P({ spark: [[14, 1, 0]] })], [1.4, P()]];
+const still = matchMedia('(prefers-reduced-motion: reduce)');
+
+function draw(canvas, pose) {
+  const ctx = canvas.getContext('2d'), cell = canvas.width / 16, top = 7 - pose.lift, dx = pose.dx || canvas.gaze || 0;
+  const fill = (x, y, rgb, alpha = 1) => { ctx.fillStyle = `rgba(${rgb},${alpha})`; ctx.fillRect(x * cell, y * cell, cell, cell); };
+  const body = [215, 119, 87].map(v => Math.round(v - 0.38 * pose.dim * (v - 33))).join();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let y = top; y < top + 8; y++) for (let x = 2; x < 14; x++) fill(x, y, body);
+  for (const x of [3, 5, 10, 12]) for (let y = top + 8; y < 17; y++) fill(x, y, body);
+  if (pose.arms !== 'tucked') {
+    const row = top + 5 + (pose.arms === 'up' ? -1 : pose.arms === 'drop' ? 1 : 0);
+    for (const y of [row, row + 1]) for (const x of [0, 1, 14, 15]) fill(x, y, body);
+  }
+  [4 + dx, 11 + dx].forEach((x, index) => {
+    if (pose.eyes === 'open') { fill(x, top + 2, '20,20,20'); fill(x, top + 3, '20,20,20'); }
+    else if (pose.eyes === 'squint') fill(x, top + 3, '20,20,20');
+    else for (const i of index === 0 ? [x - 1, x] : [x, x + 1]) fill(i, top + 3, '20,20,20');
+  });
+  const zCells = [0, 1, 2, 3, 4].map(i => [i, 0]).concat([[3, 1], [2, 2], [1, 3]], [0, 1, 2, 3, 4].map(i => [i, 4]));
+  for (const [zx, zy, alpha] of pose.z) for (const [i, j] of zCells) fill(zx + i, 3 + zy + j, '150,150,155', alpha);
+  for (const [sx, sy, size] of pose.spark) {
+    const reach = [[0, 0], ...(size > 0 ? [[1, 0], [-1, 0], [0, 1], [0, -1]] : []), ...(size > 1 ? [[2, 0], [-2, 0], [0, 2], [0, -2]] : [])];
+    for (const [i, j] of reach) if (sx + i >= 0 && sx + i < 16) fill(sx + i, 3 + sy + j, '0,144,255');
+  }
+}
+
+// One Clawd per canvas: set('idle' | 'asleep') plays the nod-off or wake first, then loops.
+function clawd(canvas, state) {
+  let timer, step = 0, steps;
+  const run = () => { const [seconds, pose] = steps[step % steps.length]; draw(canvas, pose); step++; if (step === steps.once) { steps = steps.loop; step = 0; } timer = setTimeout(run, seconds * 1000); };
+  const start = (once, loop) => {
+    clearTimeout(timer);
+    if (still.matches) return draw(canvas, loop === sleep ? asleep({ z: [[4, -1, 0.9]] }) : P());
+    steps = once ? Object.assign([...once], { once: once.length, loop }) : loop;
+    step = once ? 0 : Math.floor(Math.random() * loop.length);
+    run();
+  };
+  start(null, state === 'asleep' ? sleep : idle);
+  return {
+    set(to) { if (to === state) return; start(to === 'asleep' ? fall : wake, to === 'asleep' ? sleep : idle); state = to; },
+    cheer() { if (state === 'idle') start(wake.slice(5), idle); },
+  };
+}
+
+// The big one dozes off after a while without input and pops awake on the next.
+const bigCanvas = document.getElementById('clawd'), big = clawd(bigCanvas, 'idle');
+// He looks toward the pointer and cheers when clicked.
+addEventListener('pointermove', e => { const box = bigCanvas.getBoundingClientRect(), off = e.clientX - (box.left + box.width / 2); bigCanvas.gaze = Math.abs(off) < box.width ? 0 : Math.sign(off); }, { passive: true });
+bigCanvas.addEventListener('click', () => big.cheer());
+let nap;
+const poke = () => { big.set('idle'); clearTimeout(nap); nap = setTimeout(() => big.set('asleep'), 25000); };
+['pointermove', 'scroll', 'keydown', 'touchstart'].forEach(type => addEventListener(type, poke, { passive: true }));
+poke();
+
+// Sidebar rows: the section on screen is selected and awake, the rest sleep, like tabs you haven't looked at.
+const rows = [...document.querySelectorAll('aside a')], marks = rows.map((row, i) => clawd(row.querySelector('canvas'), i ? 'asleep' : 'idle'));
+const targets = rows.map(row => document.querySelector(row.getAttribute('href')));
+const phone = matchMedia('(max-width: 1000px)');   // on a phone the selected row is the one stuck on top
+const pick = () => {
+  const line = phone.matches ? 80 : innerHeight * 0.35, end = scrollY + innerHeight >= document.documentElement.scrollHeight - 2;
+  const current = end ? rows.length - 1 : targets.reduce((best, el, i) => el.getBoundingClientRect().top <= line ? i : best, 0);
+  rows.forEach((row, i) => { row.classList.toggle('on', i === current); marks[i].set(i === current ? 'idle' : 'asleep'); });
+};
+addEventListener('scroll', pick, { passive: true });
+pick();
+
+const bars = document.querySelector('.bars');
+new IntersectionObserver(([entry], observer) => { if (entry.isIntersecting) { bars.classList.add('seen'); observer.disconnect(); } }, { threshold: 0.4 }).observe(bars);
+
+// site-2: marks play the frames Marks.swift computes (dumped from the app's own tracks), so they match the app exactly.
+const inks = { blocked: '#f2b44e' };
+fetch('media/marks.json').then(r => r.json()).then(tracks => {
+  const players = [...document.querySelectorAll('.m')].map(el => {
+    el.innerHTML = '<svg viewBox="0 0 13 13"><path/></svg>';
+    const path = el.querySelector('path'), label = el.nextElementSibling, cycle = el.dataset.cycle?.split(',');
+    // a cycling mark switches as the app does: its loop plays on to the next seam (or its end), then its own out, then the next mark's in
+    if (cycle) return { el, path, label, cycle, cur: cycle[0], phase: 'in', since: performance.now(), leave: 0, picked: false, pending: null, pills: [...el.closest('.clip').querySelectorAll('[data-to]')] };
+    const t = tracks[el.dataset.m];
+    return { el, path, label, frames: [...t.in, ...t.loop], loopFrom: t.in.length, born: performance.now() + Math.random() * 400 };
+  });
+  const names = {"think": "Thinking", "compose": "Writing", "write": "Edit", "read": "Read", "search": "Search", "code": "Bash", "default": "Other tools", "blocked": "Waiting on you"};
+  const seams = { think: [113], code: [38, 78, 118] };   // Marks.swift's seams (30 fps, 5% slower) in 60 fps loop frames
+  const at = (p, now) => Math.max(0, Math.floor((now - p.since) * 0.06));
+  const next = p => p.pending || p.cycle[(p.cycle.indexOf(p.cur) + 1) % p.cycle.length];
+  const show = (p, name) => {
+    p.cur = name;
+    p.pending = null;
+    p.el.style.color = inks[name] || '';
+    p.label.textContent = names[name];
+    p.pills.forEach(b => b.classList.toggle('on', b.dataset.to === name));
+  };
+  const step = (p, now) => {
+    let t = tracks[p.cur];
+    if (still.matches) {
+      if (p.pending || now - p.since > 2600) { show(p, next(p)); p.since = now; }
+      return tracks[p.cur].loop[40];
+    }
+    if (p.phase === 'in' && at(p, now) >= t.in.length) {
+      p.phase = 'loop'; p.since += t.in.length / 0.06;
+      p.leave = Math.max(1, Math.round(156 / t.loop.length)) * t.loop.length; p.picked = false;
+    }
+    if (p.phase === 'loop' && p.pending === p.cur) p.pending = null;
+    if (p.phase === 'loop' && p.pending && !p.picked) {   // a pick leaves at the loop's next seam
+      const f = at(p, now), L = t.loop.length, within = f % L;
+      p.leave = f - within + ((seams[p.cur] || []).find(s => s > within + 3) ?? L); p.picked = true;
+    }
+    if (p.phase === 'loop' && at(p, now) >= p.leave) { p.phase = 'out'; p.since += p.leave / 0.06; }
+    if (p.phase === 'out' && at(p, now) >= t.out.length) { p.phase = 'in'; p.since += t.out.length / 0.06; show(p, next(p)); t = tracks[p.cur]; }
+    const f = at(p, now);
+    return p.phase === 'in' ? t.in[Math.min(f, t.in.length - 1)] : p.phase === 'out' ? t.out[Math.min(f, t.out.length - 1)] : t.loop[f % t.loop.length];
+  };
+  for (const p of players) if (p.cycle) {
+    show(p, p.cur);
+    p.pills.forEach(b => b.addEventListener('click', () => { p.pending = b.dataset.to; p.pills.forEach(x => x.classList.toggle('on', x === b)); }));
+  }
+  const tick = now => {
+    for (const p of players) {
+      if (p.cycle) { p.path.setAttribute('d', step(p, now)); continue; }
+      let f = Math.max(0, Math.floor((now - p.born) * 0.06));
+      if (still.matches) f = p.frames.length - 1;
+      else if (f >= p.frames.length) f = p.loopFrom + (f - p.loopFrom) % (p.frames.length - p.loopFrom);
+      p.path.setAttribute('d', p.frames[f]);
+      p.el.style.color = inks[p.el.dataset.m] || '';
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+});
+
+// The clips share one window: a chapter plays its clip once, then the next; a click picks one.
+const chapters = [...document.querySelectorAll('.chapters button')], screen = document.querySelector('.player img');
+let playing;
+const play = i => {
+  const ch = chapters[i];
+  chapters.forEach(c => { c.classList.toggle('on', c === ch); c.querySelector('i').getAnimations().forEach(a => a.cancel()); });
+  screen.src = ch.dataset.src + '?' + Date.now();
+  screen.alt = ch.querySelector('b').textContent;
+  if (still.matches) return;
+  playing = ch.querySelector('i').animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { duration: +ch.dataset.ms, easing: 'linear' });
+  playing.onfinish = () => play((i + 1) % chapters.length);
+};
+chapters.forEach((ch, i) => ch.addEventListener('click', e => { if (!e.target.closest('a')) play(i); }));
+new IntersectionObserver(([entry], observer) => { if (entry.isIntersecting) { play(0); observer.disconnect(); } }, { threshold: 0.5 }).observe(screen);
+
+const sheet = document.querySelector('aside');
+if (matchMedia('(max-width: 1000px)').matches) rows.forEach((row, i) => {
+  const copy = row.cloneNode(true), at = i ? targets[i] : targets[0].querySelector('section');
+  copy.classList.add('row');
+  at.prepend(copy);
+  copy.addEventListener('click', e => { e.preventDefault(); sheet.classList.add('open'); });
+  const mark = clawd(copy.querySelector('canvas'), i ? 'asleep' : 'idle'), own = marks[i];
+  marks[i] = { set: to => { own.set(to); mark.set(to); } };
+  new MutationObserver(() => copy.classList.toggle('on', row.classList.contains('on'))).observe(row, { attributes: true });
+});
+addEventListener('click', e => { if (sheet.classList.contains('open') && !e.target.closest('main a.row')) sheet.classList.remove('open'); });
+if (location.hash === '#open') sheet.classList.add('open');
+pick();
+</script>
+</body>
+</html>
