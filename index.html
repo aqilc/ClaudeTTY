@@ -183,13 +183,6 @@
   }
   /* comments go under their command where ~80 columns don't fit */
   @media (max-width: 1279px) { pre { white-space: pre-wrap; } pre em { display: block; margin-bottom: 6px; } }
-  /* side by side only where the ~80-column commands fit unscrolled */
-  @media (min-width: 1600px) {
-    #ct { display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 56px; align-items: start; }
-    #ct h2 { grid-column: 1 / -1; }
-    #ct pre { grid-row: 2 / 4; grid-column: 1; max-width: none; margin: 0; }
-    #ct p { grid-column: 2; margin-top: 0; }
-  }
 
   /* A: the page sits on the wallpaper like the app on a desktop: a frosted sidebar and a frosted pane, both blurring it */
   html { background: #2a2522; }
@@ -285,6 +278,72 @@
     .stack { --gap: 6px; }
     .sessions div { padding: 12px 4px 10px; }
     pre { margin: 0 0 16px; border-radius: 12px; }
+  }
+
+  /* ct runs itself: each line lights up as a small ClaudeTTY window answers it */
+  .win { border-radius: 14px; overflow: hidden; display: grid; grid-template-columns: 120px 1fr; min-height: 300px; background: #1b1a19; color: #e6e4e1; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 18px 50px rgba(0,0,0,.28); font-size: 13px; }
+  .win .side { padding: 34px 6px 8px; background: #2a2826; }
+  .win .side div { padding: 6px 9px 7px; border-radius: 8px; line-height: 1.3; transition: background-color 300ms ease; }
+  .win .side div.on { background: var(--blue); }
+  .win .side b { display: block; }
+  .win .side span { font-size: 11.5px; opacity: .7; }
+  .win .side canvas { width: 10px; height: 11px; margin: 3px 0; }
+  .win .tabs { display: flex; gap: 4px; height: 34px; align-items: center; padding: 0 8px; }
+  .win .tabs b { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 7px; font-weight: 500; opacity: .6; transition: opacity 300ms ease, background-color 300ms ease; animation: tabIn 350ms cubic-bezier(0.23, 1, 0.32, 1); }
+  .win .tabs b.on { opacity: 1; background: rgba(255,255,255,.1); }
+  .win .tabs canvas { width: 10px; height: 11px; }
+  @keyframes tabIn { from { opacity: 0; transform: translateY(-4px); } }
+  .win .panes { display: flex; gap: 1px; height: calc(100% - 34px); background: rgba(255,255,255,.08); }
+  .win .pane { flex: 1; min-width: 0; padding: 10px 12px; background: #1b1a19; font: 12px/1.55 var(--mono); white-space: pre-wrap; animation: tabIn 350ms cubic-bezier(0.23, 1, 0.32, 1); }
+  .win .pane em { font-style: normal; color: #8b8782; }
+  .win .pane i { font-style: normal; color: var(--clawd); }
+  .win .pane u { text-decoration: none; color: #f2b44e; }
+  pre.run span { display: block; margin: 0 -20px; padding: 0 20px; transition: background-color 250ms ease, color 250ms ease; color: #6f6b67; }
+  pre.run span.done { color: #e6e4e1; }
+  pre.run span.now { background: rgba(255,255,255,.07); color: #fff; }
+  @media (min-width: 1001px) {
+    #ct { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 28px; align-items: stretch; }
+    #ct > h2, #ct > p { grid-column: 1 / -1; }
+    #ct pre { margin: 0; max-width: none; white-space: pre-wrap; }
+    #ct pre em { display: block; margin-bottom: 6px; }
+    #ct > p:last-child { margin-top: 16px; }
+  }
+  @media (max-width: 1000px) { .win { grid-template-columns: 1fr; min-height: 260px; } .win .side { display: none; } }
+
+  /* install as the dmg window: drag the app onto Applications */
+  .drop { position: relative; height: 230px; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 .5px var(--hair), 0 18px 50px rgba(0,0,0,.12); display: flex; justify-content: space-around; align-items: center; padding-top: 24px; user-select: none; }
+  .drop::before { content: ''; position: absolute; top: 11px; left: 12px; width: 44px; height: 10px; background: radial-gradient(circle at 5px 5px, #ff5f57 4.5px, transparent 5px), radial-gradient(circle at 21px 5px, #febc2e 4.5px, transparent 5px), radial-gradient(circle at 37px 5px, #28c840 4.5px, transparent 5px); }
+  .drop::after { content: 'ClaudeTTY'; position: absolute; top: 6px; left: 0; right: 0; text-align: center; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .drop figure { margin: 0; display: grid; justify-items: center; gap: 8px; font-size: 13px; }
+  .drop figure img { width: 84px; height: 84px; }
+  .drop .app { cursor: grab; touch-action: none; transition: transform 400ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms ease; }
+  .drop .app.drag { position: relative; z-index: 1; transition: none; cursor: grabbing; }
+  .drop .apps svg { width: 84px; height: 84px; transition: transform 250ms cubic-bezier(0.23, 1, 0.32, 1); }
+  .drop .apps.hot svg { transform: scale(1.08); }
+  .drop .arrow { font-size: 28px; color: var(--muted); transition: opacity 300ms ease; }
+  .drop.done .app, .drop.done .arrow { opacity: 0; }
+  @media (min-width: 1001px) {
+    #install { display: grid; grid-template-columns: minmax(0, 1fr) 420px; column-gap: 48px; align-items: center; }
+    #install > h2 { grid-column: 1 / -1; }
+    #install > p { grid-column: 1; }
+    .drop { grid-column: 2; grid-row: 2 / 5; }
+  }
+  @media (max-width: 1000px) { .drop { margin-top: 24px; } }
+
+  /* cards rise in as they scroll into view; reduced motion keeps the fade */
+  @keyframes rise { from { opacity: 0; transform: translateY(28px); } }
+  @keyframes fade { from { opacity: 0; } }
+  @supports (animation-timeline: view()) {
+    .card, .facts p, #ct pre, .win, .drop, .bars, .stats > div { animation: rise both cubic-bezier(0.23, 1, 0.32, 1); animation-timeline: view(); animation-range: entry 0% entry 70%; }
+    @media (prefers-reduced-motion: reduce) { .card, .facts p, #ct pre, .win, .drop, .bars, .stats > div { animation-name: fade; } .win .tabs b, .win .pane { animation-name: fade; } }
+  }
+  /* the selected sidebar row's fill slides to the next row instead of jumping */
+  aside .fill { display: none; }
+  @media (min-width: 1001px) {
+    aside .fill { display: block; position: absolute; left: 10px; right: 10px; top: 0; border-radius: 10px; background: var(--blue); transition: transform 320ms cubic-bezier(0.77, 0, 0.175, 1); }
+    aside a { position: relative; }
+    aside a.on, aside a.on:hover { background: transparent; }
+    @media (prefers-reduced-motion: reduce) { aside .fill { transition: none; } }
   }
 </style>
 </head>
@@ -401,11 +460,11 @@
 <section id="ct">
   <h2>ct</h2>
   <p>ClaudeTTY installs a Claude Code plugin and a <code>ct</code> command, so the Claude in one tab can open, watch and steer the others.</p>
-<pre>ct list                          <em># every tab, its group, folder and Claude state</em>
-ct web dev bun run dev           <em># open tab "dev" in group "web", running a command</em>
-ct split dev right agent claude  <em># a new pane beside it with Claude in it</em>
-ct wait agent idle               <em># block until that Claude is done</em>
-zmx send agent "run the tests"   <em># type into it</em></pre>
+<pre class="run"><span>ct list                          <em># every tab, its group, folder and Claude state</em></span><span>ct web dev bun run dev           <em># open tab "dev" in group "web", running a command</em></span><span>ct split dev right agent claude  <em># a new pane beside it with Claude in it</em></span><span>ct wait agent idle               <em># block until that Claude is done</em></span><span>zmx send agent "run the tests"   <em># type into it</em></span></pre>
+  <div class="win">
+    <div class="side"><div class="on"><b>web</b><canvas width="32" height="34"></canvas><span>site</span></div><div><b>api</b><canvas width="32" height="34"></canvas><span>asleep</span></div></div>
+    <div><div class="tabs"><b class="on"><canvas width="32" height="34"></canvas>site</b></div><div class="panes"><div class="pane"><em>~/code/web</em> $</div></div></div>
+  </div>
   <p>Don't even look at this, it's for your Claude. ClaudeTTY teaches it to Claude automatically in ~75 tokens.</p>
 </section>
 
@@ -413,6 +472,7 @@ zmx send agent "run the tests"   <em># type into it</em></pre>
   <h2>install</h2>
   <p><a href="https://github.com/aqilc/ClaudeTTY/releases/latest/download/ClaudeTTY.dmg">Download ClaudeTTY.dmg</a>, open it and drag ClaudeTTY to Applications. It updates itself after that.</p>
   <p>On your phone or tablet, just use the Claude app. It's pretty good.</p>
+  <div class="drop"><figure class="app"><img src="media/icon.png" alt="" draggable="false">ClaudeTTY</figure><span class="arrow">→</span><figure class="apps"><svg viewBox="0 0 64 64"><path d="M6 14a4 4 0 0 1 4-4h14l5 5h25a4 4 0 0 1 4 4v31a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z" fill="#5aa6f0"/><path d="M6 22h52v28a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z" fill="#7cbcf7"/><path d="M32 28l-9 20h4l2-5h6l2 5h4zm0 7l2 5h-4z" fill="#3d86d6"/></svg>Applications</figure></div>
 </section>
 
 <footer>
@@ -494,12 +554,18 @@ poke();
 const rows = [...document.querySelectorAll('aside a')], marks = rows.map((row, i) => clawd(row.querySelector('canvas'), i ? 'asleep' : 'idle'));
 const targets = rows.map(row => document.querySelector(row.getAttribute('href')));
 const phone = matchMedia('(max-width: 1000px)');   // on a phone the selected row is the one stuck on top
+const fill = document.createElement('i');
+fill.className = 'fill';
+document.querySelector('aside').prepend(fill);
 const pick = () => {
   const line = phone.matches ? 80 : innerHeight * 0.35, end = scrollY + innerHeight >= document.documentElement.scrollHeight - 2;
   const current = end ? rows.length - 1 : targets.reduce((best, el, i) => el.getBoundingClientRect().top <= line ? i : best, 0);
   rows.forEach((row, i) => { row.classList.toggle('on', i === current); marks[i].set(i === current ? 'idle' : 'asleep'); });
+  fill.style.height = rows[current].offsetHeight + 'px';
+  fill.style.transform = `translateY(${rows[current].offsetTop}px)`;
 };
 addEventListener('scroll', pick, { passive: true });
+addEventListener('resize', pick);
 pick();
 
 const bars = document.querySelector('.bars');
@@ -618,6 +684,48 @@ stackButton.addEventListener('click', () => {
   stack.querySelector('.app span').textContent = quit ? 'not running' : 'running';
   stackButton.textContent = quit ? 'Open it again' : 'Quit ClaudeTTY';
 });
+
+// ct runs itself: each line lights up in turn and the little window answers it, then it starts over.
+{
+  const ct = document.getElementById('ct'), lines = [...ct.querySelectorAll('pre.run span')], tabs = ct.querySelector('.tabs'), panes = ct.querySelector('.panes'), group = ct.querySelector('.side span'), first = panes.firstElementChild;
+  ct.querySelectorAll('.side canvas').forEach((c, i) => clawd(c, i ? 'asleep' : 'idle'));
+  clawd(tabs.querySelector('canvas'), 'idle');
+  const tab = name => { const b = document.createElement('b'); b.innerHTML = '<canvas width="32" height="34"></canvas>' + name; tabs.append(b); clawd(b.querySelector('canvas'), 'idle'); return b; };
+  let agent;
+  const steps = [
+    () => { first.innerHTML = '<em>~/code/web</em> $ ct list\nweb  site   ~/code/web  idle\napi  server ~/code/api  asleep'; },
+    () => { tabs.querySelector('.on').classList.remove('on'); tab('dev').classList.add('on'); group.textContent = 'dev: bun run dev'; first.innerHTML = '<em>~/code/web</em> $ bun run dev\n<em>ready on</em> localhost:3000'; },
+    () => { agent = document.createElement('div'); agent.className = 'pane'; agent.innerHTML = '<i>✻</i> Claude Code\n\n> '; panes.append(agent); group.textContent = 'agent: starting'; },
+    () => { group.textContent = 'agent: idle'; agent.innerHTML = '<i>✻</i> Claude Code\n\n> <em>(idle, ct wait returns)</em>'; },
+    () => { group.innerHTML = 'agent: <u>Thinking</u>'; agent.innerHTML = '<i>✻</i> Claude Code\n\n> run the tests\n\n<u>● Bash</u>(bun test)\n  14 passed'; },
+  ];
+  const reset = () => { tabs.querySelectorAll('b').forEach((b, i) => { if (i) b.remove(); else b.classList.add('on'); }); agent?.remove(); first.innerHTML = '<em>~/code/web</em> $'; group.textContent = 'site'; };
+  const run = i => {
+    lines.forEach((l, n) => l.className = n < i ? 'done' : n === i ? 'now' : '');
+    if (i === steps.length) return setTimeout(() => { reset(); run(0); }, 4000);
+    setTimeout(() => { steps[i](); setTimeout(() => run(i + 1), 1700); }, 700);
+  };
+  new IntersectionObserver(([entry], observer) => { if (entry.isIntersecting) { run(0); observer.disconnect(); } }, { threshold: 0.5 }).observe(ct.querySelector('.win'));
+}
+
+// Drag the app onto Applications, like in the dmg. It drops in and the window empties.
+{
+  const box = document.querySelector('.drop'), app = box.querySelector('.app'), apps = box.querySelector('.apps');
+  let from;
+  const over = e => { const r = apps.getBoundingClientRect(); return e.clientX > r.left && e.clientX < r.right && e.clientY > r.top && e.clientY < r.bottom; };
+  app.addEventListener('pointerdown', e => { if (from) return; from = [e.clientX, e.clientY]; app.setPointerCapture(e.pointerId); app.classList.add('drag'); });
+  app.addEventListener('pointermove', e => { if (!from) return; app.style.transform = `translate(${e.clientX - from[0]}px, ${e.clientY - from[1]}px)`; apps.classList.toggle('hot', over(e)); });
+  const drop = e => {
+    if (!from) return;
+    app.classList.remove('drag');
+    apps.classList.remove('hot');
+    if (e.type === 'pointerup' && over(e)) { box.classList.add('done'); app.style.transform += ' scale(.6)'; }
+    else app.style.transform = '';
+    from = null;
+  };
+  app.addEventListener('pointerup', drop);
+  app.addEventListener('pointercancel', drop);
+}
 </script>
 </body>
 </html>
