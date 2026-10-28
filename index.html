@@ -84,8 +84,6 @@
     .stats { display: grid; grid-template-columns: repeat(3, auto); gap: 16px; justify-content: start; }
     .stats b { font-size: 26px; }
     pre { margin: 0 -20px 16px; border-radius: 0; font-size: 13px; }
-    pre { white-space: pre-wrap; }
-    pre em { display: block; margin-bottom: 6px; }
   }
   @media (max-width: 1000px) {
   /* B + C: each section opens with its sidebar row, which sticks while you read it */
@@ -155,12 +153,141 @@
     .player img { order: -1; }
     .player img { margin: 0 -20px; max-width: none; width: calc(100% + 40px); aspect-ratio: 1; object-fit: cover; object-position: 2% 4%; border-radius: 0; }
   }
+
+  /* site-5: the sidebar at the app's own proportions, the page as wide as the screen */
+  @media (min-width: 1001px) {
+    aside { width: 268px; padding: 12px 10px; line-height: 1.3; }
+    aside a { margin-bottom: 2px; padding: 8px 12px 9px; }
+    aside canvas { margin: 4px 0 3px; }
+    aside span { line-height: 1.35; }
+    aside code { display: block; margin-top: 2px; font-size: 11.5px; opacity: .6; }
+    aside a.on code { opacity: .85; }
+    main { max-width: none; padding: 52px clamp(32px, 4vw, 72px) 80px; }
+    #top, main > section, footer { max-width: 1200px; margin-inline: auto; }
+    #top { display: grid; grid-template-columns: 1fr auto; column-gap: 40px; align-items: end; }
+    #top > .download { margin: 0; flex-direction: column; align-items: flex-end; gap: 10px; text-align: right; }
+    #top > .band, #top > section { grid-column: 1 / -1; }
+    .band { margin-top: 44px; }
+    /* the window cut out of its README backdrop (gif px 63,62 1146 x 719, radius 14) */
+    .hero { display: block; margin: 0; aspect-ratio: 1146 / 719; overflow: hidden; border-radius: 1.22% / 1.95%; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 24px 70px rgba(0,0,0,.35); }
+    .hero img { width: 111%; max-width: none; margin: -5.41% 0 0 -5.5%; }
+    #top > section { columns: 2; column-gap: 56px; padding-top: 48px; }
+    #top > section p { max-width: none; margin: 0; break-inside: avoid; }
+    .clip, .player { grid-template-columns: 340px minmax(0, 1fr); gap: 56px; }
+    .player img { max-width: min(100%, 900px); }
+    #numbers { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 56px; align-items: start; }
+    #numbers .stats b { white-space: nowrap; }
+    #numbers > :not(.bars, .stats) { grid-column: 1 / -1; }
+    #numbers .stats { flex-direction: column; gap: 22px; margin: 0; }
+  }
+  /* comments go under their command where ~80 columns don't fit */
+  @media (max-width: 1279px) { pre { white-space: pre-wrap; } pre em { display: block; margin-bottom: 6px; } }
+  /* side by side only where the ~80-column commands fit unscrolled */
+  @media (min-width: 1600px) {
+    #ct { display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 56px; align-items: start; }
+    #ct h2 { grid-column: 1 / -1; }
+    #ct pre { grid-row: 2 / 4; grid-column: 1; max-width: none; margin: 0; }
+    #ct p { grid-column: 2; margin-top: 0; }
+  }
+
+  /* A: the page sits on the wallpaper like the app on a desktop: a frosted sidebar and a frosted pane, both blurring it */
+  html { background: #2a2522; }
+  body { background: none; }
+  body::before { content: ''; position: fixed; inset: 0; z-index: -1; background: url(media/sunset.jpg) center 35% / cover; }
+  @media (min-width: 1001px) {
+    aside { inset: 10px auto 10px 10px; border-radius: 18px; background: color-mix(in srgb, var(--side) 50%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); box-shadow: 0 0 0 .5px rgba(0,0,0,.18), 0 10px 40px rgba(0,0,0,.18); }
+    main { margin: 10px 10px 10px 288px; border-radius: 18px; background: color-mix(in srgb, var(--ground) 84%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); box-shadow: 0 0 0 .5px rgba(0,0,0,.18); }
+  }
+  @media (max-width: 1000px) {
+    main { background: color-mix(in srgb, var(--ground) 86%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); }
+    main a.row { background: color-mix(in srgb, var(--side) 55%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); }
+    aside.open { background: color-mix(in srgb, var(--side) 60%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); }
+  }
+
+  /* cards: a faint lift off the frosted pane, the app's calm idiom (no borders) */
+  :root { --card: rgba(255,255,255,.55); --hair: rgba(0,0,0,.07); }
+  @media (prefers-color-scheme: dark) { :root { --card: rgba(255,255,255,.045); --hair: rgba(255,255,255,.07); } }
+  .card { position: relative; padding: 26px; border-radius: 18px; background: var(--card); box-shadow: inset 0 0 0 .5px var(--hair); }
+  .card p { max-width: none; margin: 18px 0 0; }
+  .card p b { display: block; margin-bottom: 2px; }
+  .card small, .facts small { display: block; margin-top: 10px; font-size: 14px; line-height: 1.5; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 20px; }
+  .card.player { grid-column: 1 / -1; margin: 0; }
+  .card.player img { box-shadow: 0 0 0 .5px rgba(0,0,0,.3), 0 14px 40px rgba(0,0,0,.22); }
+  .card > button, .stack > button { margin-top: 18px; padding: 8px 14px; border: 0; border-radius: 9px; background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); font: 500 15px -apple-system, sans-serif; cursor: pointer; transition: background-color 200ms ease, transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
+  .card > button:hover { background: color-mix(in srgb, var(--ink) 13%, transparent); }
+  .card > button:active { transform: scale(.97); }
+  .duo { padding: 18px; border-radius: 12px; background: color-mix(in srgb, var(--side) 70%, transparent); }
+  .pills > * { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  .pills button:hover { background: color-mix(in srgb, var(--ink) 11%, transparent); }
+  .pills button.on { background: color-mix(in srgb, var(--ink) 16%, transparent); }
+
+  /* the sleep demo: one sidebar row, drawn like aside's */
+  .nap .tab { padding: 10px 14px 11px; border-radius: 12px; background: var(--blue); color: #fff; line-height: 1.3; transition: background-color 300ms ease, color 300ms ease; }
+  .nap .tab > b { display: block; font-size: 15px; }
+  .nap .tab canvas { width: 16px; height: 17px; margin: 4px 0 3px; }
+  .nap .tab span { display: block; font-size: 13px; }
+  .nap .tab em { font-style: normal; }
+  .nap .tab code { display: block; margin-top: 2px; font: 11.5px var(--mono); opacity: .85; }
+  .nap.asleep .tab { background: color-mix(in srgb, var(--side) 70%, transparent); color: var(--ink); }
+  .nap.asleep .tab span, .nap.asleep .tab code { color: color-mix(in srgb, var(--ink) 65%, transparent); }
+  .nap.asleep .tab span b { color: var(--ink); }
+
+  /* inside: the app and the zmx sessions it attaches to; quit it and they keep going */
+  .stack { display: flex; flex-direction: column; align-items: center; }
+  .stack .app { display: flex; align-items: center; gap: 12px; padding: 10px 18px 10px 12px; border-radius: 14px; background: color-mix(in srgb, var(--side) 70%, transparent); transition: opacity 300ms ease, filter 300ms ease, transform 300ms cubic-bezier(0.23, 1, 0.32, 1); }
+  .stack .app b { display: block; font-size: 16px; }
+  .stack .app span { display: block; font-size: 13px; color: var(--muted); }
+  .wires { display: grid; grid-template-columns: repeat(4, 1fr); width: 100%; height: 44px; }
+  .wires i { justify-self: center; width: 2px; background: var(--clawd); opacity: .55; transition: opacity 300ms ease; }
+  .sessions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; width: 100%; }
+  .sessions div { display: grid; justify-items: center; gap: 6px; padding: 14px 6px 12px; border-radius: 12px; background: color-mix(in srgb, var(--side) 70%, transparent); }
+  .sessions .m { width: 22px; height: 22px; }
+  .sessions b { font-size: 14px; }
+  .sessions code { font: 11.5px var(--mono); color: var(--muted); }
+  .stack.quit .app { opacity: .35; filter: grayscale(1); transform: scale(.96); }
+  .stack.quit .wires i { opacity: 0; }
+  .facts p { max-width: none; margin: 0 0 22px; }
+  .facts p b { display: block; margin-bottom: 2px; }
+  #inside .cards { align-items: start; }
+
+  /* comparison: three columns read across like a table, no grid lines */
+  .vs { display: grid; grid-template-columns: 1.1fr repeat(3, 1fr); gap: 14px 24px; margin: 40px 0 0; grid-column: 1 / -1; align-items: start; }
+  .vs > b { font-size: 15px; }
+  .vs > b.us { color: var(--clawd); }
+  .vs span { color: var(--muted); font-size: 15px; }
+  .vs p { margin: 0; font-size: 15px; line-height: 1.45; color: color-mix(in srgb, var(--ink) 80%, transparent); }
+  .vs p.us { color: var(--ink); font-weight: 600; }
+
+  /* ct reads as a terminal window */
+  pre { position: relative; padding-top: 44px; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 14px 40px rgba(0,0,0,.2); }
+  pre::before { content: ''; position: absolute; top: 15px; left: 16px; width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; box-shadow: 20px 0 #febc2e, 40px 0 #28c840; }
+
+  @media (min-width: 1001px) {
+    #numbers .vs { grid-column: 1 / -1; }
+  }
+  @media (max-width: 1000px) {
+    .cards { grid-template-columns: 1fr; gap: 14px; }
+    .card { padding: 18px; }
+    .card.player { display: grid; }
+    .card.player img { margin: 0; width: 100%; border-radius: 10px; }
+    .duo { padding: 14px; }
+    .stats { grid-template-columns: repeat(2, auto); gap: 16px 32px; }
+    .vs { grid-template-columns: repeat(3, 1fr); gap: 8px 14px; padding: 18px; }
+    .vs > div { display: none; }
+    .vs span { grid-column: 1 / -1; margin-top: 10px; font-size: 13px; }
+    .vs p { font-size: 14px; }
+    .sessions { gap: 6px; }
+    .sessions div { padding: 12px 4px 10px; }
+    pre { margin: 0 0 16px; border-radius: 12px; }
+  }
 </style>
 </head>
 <body>
 <aside>
   <a href="#top" class="on"><b>claudetty</b><canvas width="32" height="34"></canvas><span><b>why:</b> I took the file trees out</span><code>~/claudetty</code></a>
   <a href="#looks"><b>looks</b><canvas width="32" height="34"></canvas><span><b>dots:</b> Thinking…</span><code>~/looks</code></a>
+  <a href="#inside"><b>inside</b><canvas width="32" height="34"></canvas><span><b>zmx:</b> 4 sessions</span><code>~/inside</code></a>
   <a href="#numbers"><b>numbers</b><canvas width="32" height="34"></canvas><span><b>memory:</b> 68 MB</span><code>~/numbers</code></a>
   <a href="#ct"><b>ct</b><canvas width="32" height="34"></canvas><span><b>for:</b> your Claude</span><code>~/ct</code></a>
   <a href="#install"><b>install</b><canvas width="32" height="34"></canvas><span><b>dmg:</b> drag to Applications</span><code>~/install</code></a>
@@ -181,27 +308,61 @@
     <small>macOS 26 or later, Apple Silicon.<br>Free, and the source is on <a href="https://github.com/aqilc/ClaudeTTY">GitHub</a>.</small>
   </div>
 
-  <picture class="hero">
+  <div class="band"><picture class="hero">
     <source srcset="media/window-dark.gif" media="(prefers-color-scheme: dark)">
     <img src="media/window-light.gif" width="954" height="657" alt="ClaudeTTY over a sunset, blurring it, with Claude editing a file in one tab">
-  </picture>
+  </picture></div>
 
   <section>
-    <p>I made this because I let Claude write the code and only step in to make an edit now and then. You don't really need file trees or editors for that, so I took them out. Edits I'd make feel kind of worthless anyways, since Claude replaces them eventually.</p>
-    <p>I was using cmux before this. It's a good app, but it was buggy for me (crashed a lot, updates killed everything, and it'd pile up a bajillion unread notifications that didn't work properly). ClaudeTTY keeps the layout I liked, groups in a sidebar and tabs in the titlebar, and gets rid of the bloat. Every tab runs in the background so updates and crashes are headache-free.</p>
+    <p><b>Why.</b> I let Claude write the code and only step in now and then. You don't really need file trees or editors for that, so I took them out.</p>
+    <p><b>Before this.</b> I used cmux, but it crashed a lot and updates killed everything. ClaudeTTY keeps the layout I liked, groups in a sidebar and tabs in the titlebar, without the bloat.</p>
   </section>
 </div>
 
 <section id="looks">
   <h2>looks</h2>
-  <div class="clip"><p><b>See what every Claude is doing.</b> Each tab's dots move differently for thinking, writing, reading, searching and running code, or switch to Clawd and he acts it all out. A tab waiting on you turns amber.</p><div class="duo"><div class="morph"><i class="m" data-cycle="think,compose,write,read,search,code,default,blocked"></i><span>Thinking</span></div><div class="pills"><button data-to="think"><i class="m" data-m="think"></i>Thinking</button><button data-to="compose"><i class="m" data-m="compose"></i>Writing</button><button data-to="write"><i class="m" data-m="write"></i>Edit</button><button data-to="read"><i class="m" data-m="read"></i>Read</button><button data-to="search"><i class="m" data-m="search"></i>Search</button><button data-to="code"><i class="m" data-m="code"></i>Bash</button><button data-to="default"><i class="m" data-m="default"></i>Other tools</button><button data-to="blocked"><i class="m" data-m="blocked"></i>Waiting on you</button></div></div></div>
-  <div class="player">
-    <div class="chapters">
-      <button class="on" data-src="media/survive.gif" data-ms="7600"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every Claude keeps working.</span><i></i></button>
-      <button data-src="media/sidebar.gif" data-ms="9280"><b>Animations and polish.</b><span>Tabs and groups slide aside as you drag, and the sidebar slides like a native Mac one. Satisfying. <kbd>⌘B</kbd> for less satisfaction but some more practicality.</span><i></i></button>
-      <button data-src="media/mod.gif" data-ms="11550"><b>Change it yourself.</b><span>The whole app is about 5,500 lines of Swift in three files. Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
+  <div class="cards">
+    <div class="card marks">
+      <div class="duo"><div class="morph"><i class="m" data-cycle="think,compose,write,read,search,code,default,blocked"></i><span>Thinking</span></div><div class="pills"><button data-to="think"><i class="m" data-m="think"></i>Thinking</button><button data-to="compose"><i class="m" data-m="compose"></i>Writing</button><button data-to="write"><i class="m" data-m="write"></i>Edit</button><button data-to="read"><i class="m" data-m="read"></i>Read</button><button data-to="search"><i class="m" data-m="search"></i>Search</button><button data-to="code"><i class="m" data-m="code"></i>Bash</button><button data-to="default"><i class="m" data-m="default"></i>Other tools</button><button data-to="blocked"><i class="m" data-m="blocked"></i>Waiting on you</button></div></div>
+      <p><b>See what every Claude is doing.</b> Each tab's dots move for what its Claude is doing, or switch to Clawd and he acts it out. Waiting on you turns amber.</p>
+      <small>These are the app's own frames, dumped from Marks.swift and played at 60 fps. In the app the dots hold for a quarter second, so quick file reads don't strobe.</small>
     </div>
-    <img src="media/survive.gif" width="900" height="596" alt="The app is killed and reopened with every tab still running">
+    <div class="card nap">
+      <div class="tab"><b>weather</b><canvas width="32" height="34"></canvas><span><b>docs:</b> <em>Edit README.md</em></span><code>~/code/weather</code></div>
+      <button>Leave it for 20 minutes</button>
+      <p><b>Tabs sleep.</b> 20 minutes after a Claude's last message its process exits and the memory comes back. Click the tab and it picks up the same conversation.</p>
+      <small>A sleeping Claude's prompt cache runs out after an hour and Clawd turns icy cyan, since the next message costs more. View &gt; Keep Asleep Tabs Warm pings it at 49 minutes instead.</small>
+    </div>
+    <div class="card player">
+      <div class="chapters">
+        <button class="on" data-src="media/survive.gif" data-ms="7600"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every Claude keeps working.</span><i></i></button>
+        <button data-src="media/sidebar.gif" data-ms="9280"><b>Animations and polish.</b><span>Tabs and groups slide aside as you drag, and the sidebar slides like a native Mac one. Satisfying. <kbd>⌘B</kbd> for less satisfaction but some more practicality.</span><i></i></button>
+        <button data-src="media/mod.gif" data-ms="11550"><b>Change it yourself.</b><span>Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
+      </div>
+      <img src="media/survive.gif" width="900" height="596" alt="The app is killed and reopened with every tab still running">
+    </div>
+  </div>
+</section>
+
+<section id="inside">
+  <h2>inside</h2>
+  <div class="cards">
+    <div class="card stack">
+      <div class="app"><img src="media/icon.png" width="40" height="40" alt=""><div><b>ClaudeTTY</b><span>running</span></div></div>
+      <div class="wires"><i></i><i></i><i></i><i></i></div>
+      <div class="sessions">
+        <div><i class="m" data-m="think"></i><b>weather</b><code>zmx</code></div>
+        <div><i class="m" data-m="code"></i><b>site</b><code>zmx</code></div>
+        <div><i class="m" data-m="blocked"></i><b>api</b><code>zmx</code></div>
+        <div><i class="m" data-m="read"></i><b>notes</b><code>zmx</code></div>
+      </div>
+      <button>Quit ClaudeTTY</button>
+    </div>
+    <div class="facts">
+      <p><b>Tabs live outside the app.</b> Each one is a <a href="https://github.com/neurosnap/zmx">zmx</a> session, its own process holding a shell and its Claude. The app only attaches to them, so quitting, crashing or updating it never touches what's running.</p>
+      <p><b>Ghostty underneath.</b> Every pane is GhosttyKit, built from pinned, patched Ghostty source. zmx runs the same terminal core, so a tab looks the same after the app reattaches.</p>
+      <p><b>About 7,000 lines in three files.</b> <code>ClaudeTTY.swift</code>, <code>Marks.swift</code> and <code>Surface.swift</code>. Small enough to read in an afternoon, or to have Claude change for you.</p>
+    </div>
   </div>
 </section>
 
@@ -211,6 +372,7 @@
   <div class="bars">
     <span class="us">ClaudeTTY</span><div><i class="us" style="width:5.1%"></i>68 MB</div>
     <span>Ghostty</span><div><i style="width:6.4%"></i>84 MB</div>
+    <span>herdr</span><div><i style="width:8.3%"></i>109 MB <small>in Ghostty</small></div>
     <span>Superset</span><div><i style="width:27.2%"></i>359 MB</div>
     <span>Wave</span><div><i style="width:42.1%"></i>556 MB</div>
     <span>Warp</span><div><i style="width:67.9%"></i>895 MB</div>
@@ -220,9 +382,15 @@
     <div><b>307 ms</b><span>launch to first window</span></div>
     <div><b>0.03%</b><span>idle CPU</span></div>
     <div><b>20 MB</b><span>the whole app</span></div>
+    <div><b>140-180 MB</b><span>15 tabs, idle ones asleep</span></div>
   </div>
-  <p>Tabs also sleep like Chrome's after 20 idle minutes, so with 15 tabs open it stays at 140-180 MB on my machine. If a sleeping Claude's cache goes cold its icon turns icy cyan, or you can turn on View > Keep Asleep Tabs Warm.</p>
-  <p class="note">Median of 5 launches, one window with one tab. How I measured and the rest of the table is in the <a href="https://github.com/aqilc/ClaudeTTY#compared-to-cmux-and-others">README</a>.</p>
+  <div class="vs card">
+    <div></div><b class="us">ClaudeTTY</b><b>cmux</b><b>herdr</b>
+    <span>The app quits or crashes</span><p class="us">Every tab keeps running</p><p>Reopens your layout, what was running is gone (unless you use tmux)</p><p>Closing the terminal is fine; a server restart ends every tab</p>
+    <span>What each Claude is doing</span><p class="us">8 live marks, amber when it needs you</p><p>A ring when one needs you</p><p>Working, blocked or idle</p>
+    <span>Claude steering tabs</span><p class="us"><code>ct</code>, taught in ~75 tokens</p><p>CLI and socket</p><p>CLI and socket</p>
+  </div>
+  <p class="note">herdr 0.9.5 runs inside your terminal, so its memory is herdr plus Ghostty (herdr alone is 25 MB). Restart behavior from the <a href="https://herdr.dev/docs/session-state/">herdr docs</a> and the <a href="https://github.com/manaflow-ai/cmux">cmux README</a>. Median of 5 launches, one window with one tab. How I measured and the rest of the table is in the <a href="https://github.com/aqilc/ClaudeTTY#compared-to-cmux-and-others">README</a>.</p>
 </section>
 
 <section id="ct">
@@ -268,7 +436,7 @@ const still = matchMedia('(prefers-reduced-motion: reduce)');
 function draw(canvas, pose) {
   const ctx = canvas.getContext('2d'), cell = canvas.width / 16, top = 7 - pose.lift, dx = pose.dx || canvas.gaze || 0;
   const fill = (x, y, rgb, alpha = 1) => { ctx.fillStyle = `rgba(${rgb},${alpha})`; ctx.fillRect(x * cell, y * cell, cell, cell); };
-  const body = [215, 119, 87].map(v => Math.round(v - 0.38 * pose.dim * (v - 33))).join();
+  const body = (canvas.frost || [215, 119, 87].map(v => Math.round(v - 0.38 * pose.dim * (v - 33)))).join();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   for (let y = top; y < top + 8; y++) for (let x = 2; x < 14; x++) fill(x, y, body);
   for (const x of [3, 5, 10, 12]) for (let y = top + 8; y < 17; y++) fill(x, y, body);
@@ -339,7 +507,7 @@ fetch('media/marks.json').then(r => r.json()).then(tracks => {
     el.innerHTML = '<svg viewBox="0 0 13 13"><path/></svg>';
     const path = el.querySelector('path'), label = el.nextElementSibling, cycle = el.dataset.cycle?.split(',');
     // a cycling mark switches as the app does: its loop plays on to the next seam (or its end), then its own out, then the next mark's in
-    if (cycle) return { el, path, label, cycle, cur: cycle[0], phase: 'in', since: performance.now(), leave: 0, picked: false, pending: null, pills: [...el.closest('.clip').querySelectorAll('[data-to]')] };
+    if (cycle) return { el, path, label, cycle, cur: cycle[0], phase: 'in', since: performance.now(), leave: 0, picked: false, pending: null, pills: [...el.closest('.card').querySelectorAll('[data-to]')] };
     const t = tracks[el.dataset.m];
     return { el, path, label, frames: [...t.in, ...t.loop], loopFrom: t.in.length, born: performance.now() + Math.random() * 400 };
   });
@@ -420,6 +588,31 @@ if (matchMedia('(max-width: 1000px)').matches) rows.forEach((row, i) => {
 addEventListener('click', e => { if (sheet.classList.contains('open') && !e.target.closest('main a.row')) sheet.classList.remove('open'); });
 if (location.hash === '#open') sheet.classList.add('open');
 pick();
+
+// The sleep demo: awake, asleep after 20 minutes, cold an hour later (Marks.swift frost(): deeper on light, pale on dark), and a click wakes it.
+const napCard = document.querySelector('.nap'), napButton = napCard.querySelector('button'), napCanvas = napCard.querySelector('canvas'), napMark = clawd(napCanvas, 'idle');
+const dark = matchMedia('(prefers-color-scheme: dark)'), napSteps = [
+  ['idle', '<b>docs:</b> <em>Edit README.md</em>', 'Leave it for 20 minutes'],
+  ['asleep', '<b>docs:</b> asleep', 'Leave it for an hour'],
+  ['cold', '<b>docs:</b> asleep, cache cold', 'Wake it'],
+];
+let napAt = 0;
+napButton.addEventListener('click', () => {
+  napAt = (napAt + 1) % napSteps.length;
+  const [state, line, label] = napSteps[napAt];
+  napCard.classList.toggle('asleep', state !== 'idle');
+  napCanvas.frost = state === 'cold' ? (dark.matches ? [125, 215, 240] : [25, 150, 195]) : null;
+  napMark.set(state === 'idle' ? 'idle' : 'asleep');
+  napCard.querySelector('span').innerHTML = line;
+  napButton.textContent = label;
+});
+
+const stack = document.querySelector('.stack'), stackButton = stack.querySelector('button');
+stackButton.addEventListener('click', () => {
+  const quit = stack.classList.toggle('quit');
+  stack.querySelector('.app span').textContent = quit ? 'not running' : 'running';
+  stackButton.textContent = quit ? 'Open it again' : 'Quit ClaudeTTY';
+});
 </script>
 </body>
 </html>
