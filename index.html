@@ -172,9 +172,9 @@
     #top > .download { margin: 0; flex-direction: column; align-items: flex-end; gap: 10px; text-align: right; }
     #top > .band, #top > section { grid-column: 1 / -1; }
     .band { margin-top: 44px; }
-    /* the window cut out of its README backdrop (gif px 63,62 1146 x 719, radius 14) */
-    .hero { display: block; margin: 0; aspect-ratio: 1146 / 719; overflow: hidden; border-radius: 1.22% / 1.95%; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 24px 70px rgba(0,0,0,.35); }
-    .hero img { width: 111%; max-width: none; margin: -5.41% 0 0 -5.5%; }
+    /* the window cut out of its README backdrop (gif px 63,63 1146 x 719 inside its 1 px border ring, radius 22: its corner arc, measured on the diagonal) */
+    .hero { display: block; margin: 0; aspect-ratio: 1146 / 719; overflow: hidden; border-radius: 1.92% / 3.06%; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 24px 70px rgba(0,0,0,.35); }
+    .hero img { width: 111%; max-width: none; margin: -5.5% 0 0 -5.5%; }
     #top > section { columns: 2; column-gap: 56px; padding-top: 48px; }
     #top > section p { max-width: none; margin: 0; break-inside: avoid; }
     .clip, .player { grid-template-columns: 340px minmax(0, 1fr); gap: 56px; }
