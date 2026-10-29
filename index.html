@@ -52,10 +52,13 @@
   .bars span { color: var(--muted); }
   .bars span.us { color: var(--ink); font-weight: 600; }
   .bars div { display: flex; align-items: center; gap: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .bars i { height: 14px; border-radius: 3px; background: var(--bar); transform-origin: left; transition: transform 900ms cubic-bezier(0.23, 1, 0.32, 1); }
+  .bars i { min-width: 3px; height: 14px; border-radius: 3px; background: var(--bar); transform-origin: left; transition: transform 900ms cubic-bezier(0.23, 1, 0.32, 1), width 400ms cubic-bezier(0.77, 0, 0.175, 1); }
   .bars i.us { background: var(--clawd); }
   .bars:not(.seen) i { transform: scaleX(0); }
   .bars small { color: var(--muted); }
+  .metric { margin: 0 0 22px; }
+  .metric button { padding-left: 13px; }
+  .metric + .note { margin: -8px 0 18px; }
   .stats { display: flex; gap: 40px; flex-wrap: wrap; margin: 32px 0 8px; }
   .stats b { display: block; font-size: 32px; letter-spacing: -0.01em; }
   .stats span { color: var(--muted); font-size: 15px; }
@@ -80,15 +83,15 @@
     /* the 4 x 2 dots grid splits into two 2 x 2 halves so the labels stay readable */
     .clip:first-of-type img { aspect-ratio: 450 / 380; object-position: left; }
     .clip:first-of-type img + img { display: block; object-position: right; }
-    .bars { grid-template-columns: 74px 1fr; }
-    .stats { display: grid; grid-template-columns: repeat(3, auto); gap: 16px; justify-content: start; }
+    .bars { grid-template-columns: 84px 1fr; }
+    .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
     .stats b { font-size: 26px; }
     pre { margin: 0 -20px 16px; border-radius: 0; font-size: 13px; }
   }
   @media (max-width: 1000px) {
   /* B + C: each section opens with its sidebar row, which sticks while you read it */
   main a.row { display: grid; grid-template-columns: 48px 1fr auto; column-gap: 12px; align-items: center; position: sticky; top: 8px; z-index: 1; margin: 0 -10px 18px; padding: 10px 14px; border-radius: 12px; background: var(--side); text-decoration: none; }
-  main a.row canvas { grid-row: 1 / 3; width: 48px; height: 51px; }
+  main a.row canvas { grid-row: 1 / 3; width: 48px; height: 51px; translate: 0 -10px; }   /* Clawd fills the bottom 30 px of its canvas: center him on the text */
   main a.row b { font-size: 15px; }
   main a.row span { grid-column: 2; font-size: 13px; color: color-mix(in srgb, var(--ink) 65%, transparent); }
   main a.row span b { font-size: 13px; color: var(--ink); }
@@ -107,7 +110,7 @@
   main a.row + :not(h2), main a.row + h2 + * { margin-top: 18px; }
   aside.open { display: block; inset: 8px 10px auto 10px; width: auto; padding: 6px; border-radius: 16px; z-index: 2; box-shadow: 0 0 0 100vmax rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.28); }
   aside.open a { display: grid; grid-template-columns: 48px 1fr auto; column-gap: 12px; align-items: center; padding: 10px 14px; animation: down 220ms cubic-bezier(0.23, 1, 0.32, 1) both; }
-  aside.open a canvas { grid-row: 1 / 3; width: 48px; height: 51px; margin: 0; }
+  aside.open a canvas { grid-row: 1 / 3; width: 48px; height: 51px; margin: 0; translate: 0 -10px; }
   aside.open a span { grid-column: 2; }
   aside.open a code { grid-column: 3; grid-row: 1 / 3; opacity: .7; }
   @keyframes down { from { opacity: 0; transform: translateY(-8px); } }
@@ -193,7 +196,9 @@
     main { margin: 10px 10px 10px 288px; border-radius: 18px; background: color-mix(in srgb, var(--ground) 84%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); box-shadow: 0 0 0 .5px rgba(0,0,0,.18); }
   }
   @media (max-width: 1000px) {
-    main { background: color-mix(in srgb, var(--ground) 86%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); }
+    /* a backdrop-filter on the page-tall main fails in WebKit and starves the rows nested in it: blur the fixed wallpaper itself */
+    body::before { inset: -80px; filter: blur(40px) saturate(1.8); }
+    main { background: color-mix(in srgb, var(--ground) 86%, transparent); }
     main a.row { background: color-mix(in srgb, var(--side) 55%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); }
     aside.open { background: color-mix(in srgb, var(--side) 60%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); }
   }
@@ -249,13 +254,13 @@
   .facts p b { display: block; margin-bottom: 2px; }
   #inside .cards { align-items: start; }
 
-  /* comparison: three columns read across like a table, no grid lines */
-  .vs { display: grid; grid-template-columns: 1.1fr repeat(3, 1fr); gap: 14px 24px; margin: 40px 0 0; grid-column: 1 / -1; align-items: start; }
-  .vs > b { font-size: 15px; }
-  .vs > b.us { color: var(--clawd); }
-  .vs span { color: var(--muted); font-size: 15px; }
-  .vs p { margin: 0; font-size: 15px; line-height: 1.45; color: color-mix(in srgb, var(--ink) 80%, transparent); }
-  .vs p.us { color: var(--ink); font-weight: 600; }
+  /* comparison: a card per question, every app answering it on its own line */
+  .vs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; margin: 40px 0 0; grid-column: 1 / -1; align-items: start; }
+  .vs b { font-size: 17px; }
+  .vs .card p { position: relative; padding-left: 96px; margin: 12px 0 0; font-size: 15px; line-height: 1.4; color: color-mix(in srgb, var(--ink) 80%, transparent); }
+  .vs .card p span { position: absolute; left: 0; color: var(--muted); }
+  .vs .card p.us { margin-top: 16px; color: var(--ink); font-weight: 600; }
+  .vs .card p.us span { color: var(--clawd); }
 
   /* ct reads as a terminal window */
   pre { position: relative; padding-top: 44px; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 14px 40px rgba(0,0,0,.2); }
@@ -271,10 +276,7 @@
     .card.player img { margin: 0; width: 100%; border-radius: 10px; }
     .duo { padding: 14px; }
     .stats { grid-template-columns: repeat(2, auto); gap: 16px 32px; }
-    .vs { grid-template-columns: repeat(3, 1fr); gap: 8px 14px; padding: 18px; }
-    .vs > div { display: none; }
-    .vs span { grid-column: 1 / -1; margin-top: 10px; font-size: 13px; }
-    .vs p { font-size: 14px; }
+    .vs { gap: 14px; }
     .stack { --gap: 6px; }
     .sessions div { padding: 12px 4px 10px; }
     pre { margin: 0 0 16px; border-radius: 12px; }
@@ -432,29 +434,54 @@
 
 <section id="numbers">
   <h2>numbers</h2>
-  <p>Memory with one idle tab, on my M4 Pro:</p>
+  <p>On my M4 Pro, one window with one tab:</p>
+  <div class="pills metric"><button class="on">Memory</button><button>Idle CPU</button><button>Launch</button><button>Size</button></div>
+  <p class="note">Activity Monitor's footprint 20 s after launch. Mine includes the zmx process holding the tab.</p>
   <div class="bars">
     <span class="us">ClaudeTTY</span><div><i class="us" style="width:5.1%"></i>68 MB</div>
     <span>Ghostty</span><div><i style="width:6.4%"></i>84 MB</div>
     <span>herdr</span><div><i style="width:8.3%"></i>109 MB <small>in Ghostty</small></div>
-    <span>Superset</span><div><i style="width:27.2%"></i>359 MB</div>
-    <span>Wave</span><div><i style="width:42.1%"></i>556 MB</div>
-    <span>Warp</span><div><i style="width:67.9%"></i>895 MB</div>
+    <span>Superset</span><div><i style="width:27.2%"></i>359 MB <small>5×</small></div>
+    <span>Wave</span><div><i style="width:42.1%"></i>556 MB <small>8×</small></div>
+    <span>Warp</span><div><i style="width:67.9%"></i>895 MB <small>13×</small></div>
     <span>cmux</span><div><i style="width:78%"></i>1,029 MB <small>15×</small></div>
   </div>
   <div class="stats">
-    <div><b>307 ms</b><span>launch to first window</span></div>
-    <div><b>0.03%</b><span>idle CPU</span></div>
-    <div><b>20 MB</b><span>the whole app</span></div>
+    <div><b>15×</b><span>less memory than cmux</span></div>
+    <div><b>103×</b><span>less idle CPU than cmux</span></div>
+    <div><b>23×</b><span>smaller than cmux</span></div>
     <div><b>140-180 MB</b><span>15 tabs, idle ones asleep</span></div>
   </div>
-  <div class="vs card">
-    <div></div><b class="us">ClaudeTTY</b><b>cmux</b><b>herdr</b>
-    <span>The app quits or crashes</span><p class="us">Every tab keeps running</p><p>Reopens your layout, what was running is gone (unless you use tmux)</p><p>Closing the terminal is fine; a server restart ends every tab</p>
-    <span>What each Claude is doing</span><p class="us">8 live marks, amber when it needs you</p><p>A ring when one needs you</p><p>Working, blocked or idle</p>
-    <span>Claude steering tabs</span><p class="us"><code>ct</code>, taught in ~75 tokens</p><p>CLI and socket</p><p>CLI and socket</p>
+  <div class="vs">
+    <div class="card"><b>The app quits or crashes</b>
+      <p class="us"><span>ClaudeTTY</span>Every tab keeps running</p>
+      <p><span>cmux</span>Reopens your layout, but what was running is gone (unless you use tmux)</p>
+      <p><span>herdr</span>Closing the terminal is fine, a server restart ends every tab</p>
+      <p><span>Superset</span>Every tab keeps running</p>
+      <p><span>Warp</span>Every tab is gone</p>
+      <p><span>Wave</span>Only over SSH, and only if you turn it on</p>
+      <p><span>Ghostty</span>Every tab is gone</p>
+    </div>
+    <div class="card"><b>What each Claude is doing</b>
+      <p class="us"><span>ClaudeTTY</span>8 live marks, amber when it needs you</p>
+      <p><span>cmux</span>A ring when one needs you</p>
+      <p><span>herdr</span>Working or blocked</p>
+      <p><span>Superset</span>Working or done</p>
+      <p><span>Warp</span>With its plugin</p>
+      <p><span>Wave</span>Nothing</p>
+      <p><span>Ghostty</span>Nothing</p>
+    </div>
+    <div class="card"><b>Claude running other tabs</b>
+      <p class="us"><span>ClaudeTTY</span><code>ct</code>, taught in ~75 tokens</p>
+      <p><span>cmux</span>CLI and socket</p>
+      <p><span>herdr</span>CLI and socket</p>
+      <p><span>Superset</span>CLI, MCP and SDK</p>
+      <p><span>Warp</span>No</p>
+      <p><span>Wave</span>The <code>wsh</code> CLI</p>
+      <p><span>Ghostty</span>No</p>
+    </div>
   </div>
-  <p class="note">herdr 0.9.5 runs inside your terminal, so its memory is herdr plus Ghostty (herdr alone is 25 MB). Restart behavior from the <a href="https://herdr.dev/docs/session-state/">herdr docs</a> and the <a href="https://github.com/manaflow-ai/cmux">cmux README</a>. Median of 5 launches, one window with one tab. How I measured and the rest of the table is in the <a href="https://github.com/aqilc/ClaudeTTY#compared-to-cmux-and-others">README</a>.</p>
+  <p class="note">macOS 27.0 on an M4 Pro with 48 GB. cmux 0.65.2, Superset 1.39.0, Warp 0.2026.10.14 and Wave 0.14.5 ran on fresh profiles, Ghostty is 1.3.1. herdr 0.9.5 runs inside your terminal, so its numbers are herdr plus Ghostty (herdr alone is 25 MB, 0.2% and 24 MB). Restart behavior is from the <a href="https://herdr.dev/docs/session-state/">herdr docs</a> and the <a href="https://github.com/manaflow-ai/cmux">cmux README</a>, and the same table is in the <a href="https://github.com/aqilc/ClaudeTTY#compared-to-cmux-and-others">README</a>.</p>
 </section>
 
 <section id="ct">
@@ -569,6 +596,28 @@ addEventListener('resize', pick);
 pick();
 
 const bars = document.querySelector('.bars');
+// site-7: the README's numbers, apps in the bars' order (ClaudeTTY, Ghostty, herdr, Superset, Wave, Warp, cmux); herdr's launch was never timed
+const metrics = [
+  { note: "Activity Monitor's footprint 20 s after launch. Mine includes the zmx process holding the tab.", values: [68, 84, 109, 359, 556, 895, 1029], show: v => v.toLocaleString('en-US') + ' MB' },
+  { note: 'Average CPU from 20 to 50 s after launch.', values: [0.03, 0.7, 0.9, 1.9, 1.9, 3.2, 3.1], show: v => v + '%' },
+  { note: 'Launch to first window, median of 5.', values: [307, 302, null, 889, 1226, 829, 701], show: v => v.toLocaleString('en-US') + ' ms' },
+  { note: 'The whole app on disk.', values: [20, 62, 86, 1500, 531, 872, 454], show: v => v < 1000 ? v + ' MB' : v / 1000 + ' GB' },
+];
+const metricButtons = document.querySelectorAll('.metric button');
+metricButtons.forEach((button, m) => button.addEventListener('click', () => {
+  const { note, values, show } = metrics[m], max = Math.max(...values);
+  metricButtons.forEach(b => b.classList.toggle('on', b === button));
+  document.querySelector('.metric + .note').textContent = note;
+  bars.querySelectorAll('div').forEach((row, i) => {
+    const v = values[i], times = Math.round(v / values[0]);
+    const bar = row.querySelector('i');
+    bar.style.width = v == null ? '0' : `calc(${v / max} * (100% - 8.5em))`;
+    bar.style.minWidth = v == null ? '0' : '';
+    while (bar.nextSibling) bar.nextSibling.remove();   // replacing the bar too would restart it without its transition
+    row.insertAdjacentHTML('beforeend', (v == null ? '<small>not timed</small>' : show(v)) + (i == 2 && v != null ? ' <small>in Ghostty</small>' : times >= 2 ? ` <small>${times}×</small>` : ''));
+  });
+}));
+metricButtons[0].click();
 new IntersectionObserver(([entry], observer) => { if (entry.isIntersecting) { bars.classList.add('seen'); observer.disconnect(); } }, { threshold: 0.4 }).observe(bars);
 
 // site-2: marks play the frames Marks.swift computes (dumped from the app's own tracks), so they match the app exactly.
