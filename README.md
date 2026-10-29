@@ -1,5 +1,5 @@
 <div align="center">
-  <h1><img src="media/icon.png" width="64" align="absmiddle" alt=""> ClaudeTTY</h1>
+  <p><img src="media/icon.png" width="64" align="absmiddle" alt=""> <img src="media/title.svg" height="40" align="absmiddle" alt="ClaudeTTY"></p>
   <p>A fast, undying cmux for Claude Code.</p>
   <p><a href="https://github.com/aqilc/ClaudeTTY/releases/latest/download/ClaudeTTY.dmg"><img src="media/download.svg" width="200" alt="Download for Mac"></a><br><sub>macOS 26 or later, Apple Silicon</sub></p>
 </div>
@@ -52,7 +52,7 @@ I made dragging tabs, groups and the sidebar feel right. Dragging the sidebar sh
 Smaller Things I Like
 ---------------------
 
-- Tabs sleep like Chrome's after 20 idle minutes, and wake into the same session.
+- Tabs sleep like Chrome's after 20 idle minutes, which saves about 500 MB each, and wake into the same session.
 - A cold cache turns a sleeping Claude icy cyan. View > Keep Asleep Tabs Warm prevents it.
 - Right-click a tab for its model, effort and context.
 - The sidebar names the background command a Claude is waiting on.
@@ -78,6 +78,8 @@ Compared to cmux and Others
 | App size | 20 MB | 454 MB | 86 MB | 1.5 GB | 872 MB | 531 MB | 62 MB |
 
 <sub>All on my M4 Pro (48 GB) with macOS 27.0 and one window with one tab. Launch is the median of 5, memory is Activity Monitor's footprint 20 s after launch (ClaudeTTY's includes the zmx process holding the tab) and CPU is over the 30 s after that. cmux 0.65.2, Superset 1.39.0, Warp 0.2026.10.14 and Wave 0.14.5 on fresh profiles, Ghostty 1.3.1. herdr 0.9.5 runs inside your terminal, so its numbers are herdr plus Ghostty (herdr alone is 25 MB, 0.2% and 24 MB). Closing the terminal keeps its tabs running, but a server restart ends them (<a href="https://herdr.dev/docs/session-state/">herdr docs</a>). Without tmux, cmux reopens your layout and restarts Claude into its last conversation, but whatever was running is gone (<a href="https://github.com/manaflow-ai/cmux">cmux README</a>).</sub>
+
+That 68 MB is just the app though. Each Claude Code takes about 500 MB on its own and keeps using a bit of CPU while idle, so the tabs that fall asleep end up saving way more than the app does.
 
 Letting Claude Run Your Tabs
 ----------------------------
