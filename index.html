@@ -20,8 +20,8 @@
   aside a { display: block; padding: 9px 14px 10px; border-radius: 10px; text-decoration: none; transition: background-color 200ms ease; }
   aside a:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
   aside a.on { background: var(--blue); color: #fff; }
-  aside b { display: block; font-size: 15px; }
-  aside canvas { width: 16px; height: 17px; margin: 3px 0 4px; }
+  aside b { font-size: 15px; }
+  aside canvas { display: inline; width: 16px; height: 17px; margin-left: 5px; }   /* a lone Claude's Clawd sits on the name line, as in the app */
   aside span { display: block; font-size: 13px; color: color-mix(in srgb, var(--ink) 65%, transparent); }
   aside span b { display: inline; font-size: 13px; color: var(--ink); }
   aside a.on span, aside a.on span b { color: #fff; }
@@ -162,7 +162,7 @@
   @media (min-width: 1001px) {
     aside { width: 268px; padding: 12px 10px; line-height: 1.3; }
     aside a { margin-bottom: 2px; padding: 8px 12px 9px; }
-    aside canvas { margin: 4px 0 3px; }
+
     aside span { line-height: 1.35; }
     aside code { display: block; margin-top: 2px; font-size: 11.5px; opacity: .6; }
     aside a.on code { opacity: .85; }
@@ -180,9 +180,9 @@
     .clip, .player { grid-template-columns: 340px minmax(0, 1fr); gap: 56px; }
     .player img { max-width: min(100%, 900px); }
     #numbers { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 56px; align-items: start; }
-    #numbers .stats b { white-space: nowrap; }
+    #numbers .stats b { white-space: nowrap; line-height: 1.2; }
     #numbers > :not(.bars, .stats) { grid-column: 1 / -1; }
-    #numbers .stats { flex-direction: column; gap: 22px; margin: 0; }
+    #numbers .stats { display: grid; grid-template-columns: repeat(2, auto); gap: 0 40px; align-content: space-between; align-self: stretch; margin: 0; }   /* as tall as the bars, never taller */
   }
   /* comments go under their command where ~80 columns don't fit */
   @media (max-width: 1279px) { pre { white-space: pre-wrap; } pre em { display: block; margin-bottom: 6px; } }
@@ -223,8 +223,8 @@
 
   /* the sleep demo: one sidebar row, drawn like aside's */
   .nap .tab { padding: 10px 14px 11px; border-radius: 12px; background: var(--blue); color: #fff; line-height: 1.3; transition: background-color 300ms ease, color 300ms ease; }
-  .nap .tab > b { display: block; font-size: 15px; }
-  .nap .tab canvas { width: 16px; height: 17px; margin: 4px 0 3px; }
+  .nap .tab > b { font-size: 15px; }
+  .nap .tab canvas { display: inline; width: 16px; height: 17px; margin-left: 5px; }
   .nap .tab span { display: block; font-size: 13px; }
   .nap .tab em { font-style: normal; }
   .nap .tab code { display: block; margin-top: 2px; font: 11.5px var(--mono); opacity: .85; }
@@ -269,6 +269,9 @@
   @media (min-width: 1001px) {
     #numbers .vs { grid-column: 1 / -1; }
   }
+  @media (min-width: 1001px) and (max-width: 1279px) {   /* beside the bars they'd squeeze them under ~420 px */
+    #numbers .stats { grid-column: 1 / -1; grid-template-columns: repeat(3, auto); justify-content: start; gap: 24px 48px; margin-top: 32px; }
+  }
   @media (max-width: 1000px) {
     .cards { grid-template-columns: 1fr; gap: 14px; }
     .card { padding: 18px; }
@@ -287,9 +290,8 @@
   .win .side { padding: 34px 6px 8px; background: #2a2826; }
   .win .side div { padding: 6px 9px 7px; border-radius: 8px; line-height: 1.3; transition: background-color 300ms ease; }
   .win .side div.on { background: var(--blue); }
-  .win .side b { display: block; }
-  .win .side span { font-size: 11.5px; opacity: .7; }
-  .win .side canvas { width: 10px; height: 11px; margin: 3px 0; }
+  .win .side span { display: block; font-size: 11.5px; opacity: .7; }
+  .win .side canvas { display: inline; width: 10px; height: 11px; margin-left: 4px; }
   .win .tabs { display: flex; gap: 4px; height: 34px; align-items: center; padding: 0 8px; }
   .win .tabs b { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 7px; font-weight: 500; opacity: .6; transition: opacity 300ms ease, background-color 300ms ease; animation: tabIn 350ms cubic-bezier(0.23, 1, 0.32, 1); }
   .win .tabs b.on { opacity: 1; background: rgba(255,255,255,.1); }
@@ -449,7 +451,9 @@
   <div class="stats">
     <div><b>15×</b><span>less memory than cmux</span></div>
     <div><b>103×</b><span>less idle CPU than cmux</span></div>
+    <div><b>2.3×</b><span>faster launch than cmux</span></div>
     <div><b>23×</b><span>smaller than cmux</span></div>
+    <div><b>3×</b><span>smaller than Ghostty</span></div>
     <div><b>140-180 MB</b><span>15 tabs, idle ones asleep</span></div>
   </div>
   <div class="vs">
