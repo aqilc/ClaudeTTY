@@ -38,8 +38,8 @@
   .download small { color: var(--muted); font-size: 14px; }
   .hero { display: block; margin: 0 -24px; }
 
-  section { padding-top: 72px; }
-  h2 { margin: 0 0 16px; font: 600 13px var(--mono); color: var(--muted); }
+  section { padding-top: 96px; }
+  h2 { margin: 0 0 24px; font: 600 13px var(--mono); color: var(--muted); }
   h2::before { content: "~/"; }
   p { max-width: 620px; }
   .clip { display: grid; grid-template-columns: 250px 1fr; gap: 32px; margin: 40px 0; align-items: start; }
@@ -206,11 +206,11 @@
   /* cards: a faint lift off the frosted pane, the app's calm idiom (no borders) */
   :root { --card: rgba(255,255,255,.55); --hair: rgba(0,0,0,.07); }
   @media (prefers-color-scheme: dark) { :root { --card: rgba(255,255,255,.045); --hair: rgba(255,255,255,.07); } }
-  .card { position: relative; padding: 26px; border-radius: 18px; background: var(--card); box-shadow: inset 0 0 0 .5px var(--hair); }
+  .card { position: relative; padding: 28px; border-radius: 18px; background: var(--card); box-shadow: inset 0 0 0 .5px var(--hair); }
   .card p { max-width: none; margin: 18px 0 0; }
   .card p b { display: block; margin-bottom: 2px; }
   .card small, .facts small { display: block; margin-top: 10px; font-size: 14px; line-height: 1.5; color: var(--muted); }
-  .cards { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 20px; }
+  .cards { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 28px; }
   .card.player { grid-column: 1 / -1; margin: 0; }
   .card.player img { box-shadow: 0 0 0 .5px rgba(0,0,0,.3), 0 14px 40px rgba(0,0,0,.22); }
   .card > button, .stack > button { margin-top: 18px; padding: 8px 14px; border: 0; border-radius: 9px; background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); font: 500 15px -apple-system, sans-serif; cursor: pointer; transition: background-color 200ms ease, transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
@@ -255,8 +255,9 @@
   #inside .cards { align-items: start; }
 
   /* comparison: a card per question, every app answering it on its own line */
-  .vs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; margin: 40px 0 0; grid-column: 1 / -1; align-items: start; }
+  .vs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 24px; margin: 48px 0 0; grid-column: 1 / -1; align-items: start; }
   .vs b { font-size: 17px; }
+  .vs + .note { margin-top: 24px; }
   .vs .card p { position: relative; padding-left: 96px; margin: 12px 0 0; font-size: 15px; line-height: 1.4; color: color-mix(in srgb, var(--ink) 80%, transparent); }
   .vs .card p span { position: absolute; left: 0; color: var(--muted); }
   .vs .card p.us { margin-top: 16px; color: var(--ink); font-weight: 600; }
@@ -273,13 +274,13 @@
     #numbers .stats { grid-column: 1 / -1; grid-template-columns: repeat(3, auto); justify-content: start; gap: 24px 48px; margin-top: 32px; }
   }
   @media (max-width: 1000px) {
-    .cards { grid-template-columns: 1fr; gap: 14px; }
-    .card { padding: 18px; }
+    .cards { grid-template-columns: 1fr; gap: 18px; }
+    .card { padding: 20px; }
     .card.player { display: grid; }
     .card.player img { margin: 0; width: 100%; border-radius: 10px; }
     .duo { padding: 14px; }
     .stats { grid-template-columns: repeat(2, auto); gap: 16px 32px; }
-    .vs { gap: 14px; }
+    .vs { gap: 18px; }
     .stack { --gap: 6px; }
     .sessions div { padding: 12px 4px 10px; }
     pre { margin: 0 0 16px; border-radius: 12px; }
@@ -310,7 +311,7 @@
     #ct > h2, #ct > p { grid-column: 1 / -1; }
     #ct pre { margin: 0; max-width: none; white-space: pre-wrap; }
     #ct pre em { display: block; margin-bottom: 6px; }
-    #ct > p:last-child { margin-top: 16px; }
+    #ct > p:last-child { margin-top: 28px; }
   }
   @media (max-width: 1000px) { .win { grid-template-columns: 1fr; min-height: 260px; } .win .side { display: none; } }
 
