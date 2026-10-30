@@ -350,6 +350,58 @@
     aside a.on, aside a.on:hover { background: transparent; }
     @media (prefers-reduced-motion: reduce) { aside .fill { transition: none; } }
   }
+
+  /* type below the title: one ladder (14 / 15 / 17 / 20 / 36) and one gap per relation (8 inside a unit, 16 between siblings, 24 under a label, 28 around any surface, 96 between sections) */
+  :root { --in: 8px; --sib: 16px; --unit: 28px; }
+  @media (max-width: 1000px) { :root { --unit: 24px; } }
+
+  /* body copy: 1.6 and balanced line ends; every p starts with no browser margin */
+  main section p, footer p { margin: 0; line-height: 1.6; text-wrap: pretty; }
+  main section h2 { font-size: 14px; }
+  .note { font-size: 14px; line-height: 1.5; }
+  .card small, .facts small { font-size: 14px; }
+  footer { font-size: 14px; }
+
+  /* lead-in titles (the bold first words, run-in or block): one style, 8 above the body */
+  main section p > b:first-child, .chapters b, .vs .card > b { display: block; margin: 0 0 var(--in); font-size: 20px; font-weight: 600; line-height: 1.3; letter-spacing: -0.012em; text-wrap: balance; }
+  .chapters span { margin-top: 0; }
+  .chapters span::before { content: ''; display: block; height: var(--in); }
+  .chapters .on b { margin-bottom: 0; }
+
+  /* inline mono sits under the sans: smaller, never taller than the line, never split */
+  main section :is(p, span) :is(code, kbd) { font-size: .88em; line-height: 1; white-space: nowrap; }
+
+  /* gaps between blocks of a section: label and surfaces get the unit, siblings 16 */
+  main section > :is(p, pre, .win, .drop, .pills, .note) { margin-top: var(--sib); margin-bottom: 0; }
+  main section > :is(.cards, .bars, .stats, .vs, pre, .win, .drop) { margin-top: var(--unit); }
+  main section > a.row + :not(h2), main section > a.row + h2 + * { margin-top: var(--unit); }
+  main section > :is(.cards, .bars, .stats, .vs) { margin-bottom: 0; }
+  main section > :is(pre, .win, .drop, .cards, .vs, .bars, .stats) + p { margin-top: var(--unit); }
+  main section > :is(pre, .win, .drop, .cards, .vs, .bars, .stats) + .note, main section > .metric + .note { margin: var(--sib) 0 0; }
+  main section > :first-child { margin-top: 0; }
+  main section > h2 + :is(p, pre, .win, .drop, .pills, .note, .cards, .bars, .stats, .vs) { margin-top: 24px; }   /* the label gap he accepted in 93e385e3 */
+  main section > h2 { margin-bottom: 0; }
+  #ct > p:last-child { margin-top: var(--unit); }
+  #ct :is(pre, .win) { margin-top: var(--unit); }
+  #numbers .stats { margin-top: var(--unit); }
+  @media (min-width: 1001px) { #install .drop { margin-top: 24px; } }   /* top edge with the first paragraph */
+  #top > section > p + p { margin-top: var(--unit); }
+  .cards, .vs { gap: var(--unit); }
+  .card { padding: var(--unit); }
+
+  /* inside a card or the facts column */
+  .card p { margin-top: var(--unit); }
+  .card small, .facts small { margin-top: var(--sib); }
+  .card > button, .stack > button { margin-top: var(--sib); }
+  .facts p { margin: 0; }
+  .facts p + p { margin-top: var(--unit); }
+  .vs .card p, .vs .card p.us { margin-top: var(--sib); padding-left: 88px; font-size: 15px; line-height: 1.5; }
+
+  /* stats: the number and its caption are one unit */
+  .stats b, #numbers .stats b { font-size: 36px; letter-spacing: -0.02em; line-height: 1.1; margin-bottom: var(--in); }
+  .stats span { display: block; line-height: 1.4; text-wrap: pretty; }
+  @media (max-width: 1000px) { .stats { gap: var(--unit); } }
+
 </style>
 </head>
 <body>
