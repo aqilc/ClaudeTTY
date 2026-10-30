@@ -287,7 +287,8 @@
   }
 
   /* ct runs itself: each line lights up as a small ClaudeTTY window answers it */
-  .win { border-radius: 14px; overflow: hidden; display: grid; grid-template-columns: 120px 1fr; min-height: 300px; background: #1b1a19; color: #e6e4e1; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 18px 50px rgba(0,0,0,.28); font-size: 13px; }
+  .win { position: relative; border-radius: 14px; overflow: hidden; display: grid; grid-template-columns: 120px 1fr; min-height: 300px; background: #1b1a19; color: #e6e4e1; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 18px 50px rgba(0,0,0,.28); font-size: 13px; }
+  .win::before { content: ''; position: absolute; top: 11px; left: 12px; width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; box-shadow: 20px 0 #febc2e, 40px 0 #28c840; }   /* traffic lights over the sidebar, in the tab row on a phone */
   .win .side { padding: 34px 6px 8px; background: #2a2826; }
   .win .side div { padding: 6px 9px 7px; border-radius: 8px; line-height: 1.3; transition: background-color 300ms ease; }
   .win .side div.on { background: var(--blue); }
@@ -313,7 +314,7 @@
     #ct pre em { display: block; margin-bottom: 6px; }
     #ct > p:last-child { margin-top: 28px; }
   }
-  @media (max-width: 1000px) { .win { grid-template-columns: 1fr; min-height: 260px; } .win .side { display: none; } }
+  @media (max-width: 1000px) { .win { grid-template-columns: 1fr; min-height: 260px; } .win .side { display: none; } .win .tabs { padding-left: 72px; } }
 
   /* install as the dmg window: drag the app onto Applications */
   .drop { position: relative; height: 230px; border-radius: 14px; background: var(--card); box-shadow: inset 0 0 0 .5px var(--hair), 0 18px 50px rgba(0,0,0,.12); display: flex; justify-content: space-around; align-items: center; padding-top: 24px; user-select: none; }
