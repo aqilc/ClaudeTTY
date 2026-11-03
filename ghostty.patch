@@ -137,10 +137,20 @@ index 463ea9bfc..3f39b8071 100644
  test "url regex" {
      const testing = std.testing;
 diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
-index 9247454db..ca1c3e6c2 100644
+index 9247454db..af9288293 100644
 --- a/src/renderer/Metal.zig
 +++ b/src/renderer/Metal.zig
-@@ -170,6 +170,7 @@ pub fn loopEnter(self: *Metal) void {
+@@ -33,8 +33,7 @@ pub const custom_shader_target: shadertoy.Target = .msl;
+ // The fragCoord for Metal shaders is +Y = down.
+ pub const custom_shader_y_is_down = true;
+ 
+-/// Triple buffering.
+-pub const swap_chain_count = 3;
++pub const swap_chain_count = 2;
+ 
+ const log = std.log.scoped(.metal);
+ 
+@@ -170,6 +169,7 @@ pub fn loopEnter(self: *Metal) void {
  }
  
  fn displayCallback(renderer: *Renderer) align(8) void {
@@ -148,46 +158,199 @@ index 9247454db..ca1c3e6c2 100644
      renderer.drawFrame(true) catch |err| {
          log.warn("Error drawing frame in display callback, err={}", .{err});
      };
+diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
+index f66fd3842..d6e4b31d2 100644
+--- a/src/renderer/Thread.zig
++++ b/src/renderer/Thread.zig
+@@ -674,7 +674,7 @@ fn cursorTimerCallback(
+     };
+ 
+     t.flags.cursor_blink_visible = !t.flags.cursor_blink_visible;
+-    t.wakeup.notify() catch {};
++    if (t.renderer.cursor_blinks) t.wakeup.notify() catch {};
+ 
+     t.cursor_h.run(
+         &t.loop,
+@@ -784,6 +784,7 @@ const Compression = struct {
+             const activity = thread.state.terminal.compressionActivity();
+             if (self.activity == activity) return;
+             self.activity = activity;
++            if (self.completion.state() == .active) return;
+         } else if (self.completion.state() == .active) {
+             // Contention doesn't prove that compression-relevant activity
+             // changed. Keep an existing deadline so frequent inspector frames
+@@ -838,14 +839,10 @@ const Compression = struct {
+         if (!thread.config.scrollback_compression) return null;
+ 
+         const state = thread.state;
+-        if (!state.mutex.tryLock()) return idle_interval;
++        if (!state.mutex.tryLock()) return step_interval;
+         defer state.mutex.unlock(global.io());
+ 
+-        const activity = state.terminal.compressionActivity();
+-        if (self.activity != activity) {
+-            self.activity = activity;
+-            return idle_interval;
+-        }
++        self.activity = state.terminal.compressionActivity();
+ 
+         return switch (state.terminal.compress(.incremental)) {
+             .pending => step_interval,
 diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
-index 2a81f42b4..c99909a91 100644
+index 2a81f42b4..6554eb6cc 100644
 --- a/src/renderer/generic.zig
 +++ b/src/renderer/generic.zig
-@@ -130,6 +130,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -120,6 +120,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+         /// True if the window is visible.
+         visible: bool,
+ 
++        cursor_blinks: bool = false,
++
+         /// Flag to indicate that our focus state changed for custom
+         /// shaders to update their state.
+         custom_shader_focused_changed: bool = false,
+@@ -130,6 +132,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
          scrollbar: terminal.Scrollbar,
          scrollbar_dirty: bool,
  
 +        edge: ?apprt.surface.Message.Edge = null,
++        edge_rows: [2]?terminal.color.RGB = .{ null, null },
 +
          /// Tracks the last bottom-right pin of the screen to detect new output.
          /// When the final line changes (node or y differs), new content was added.
          /// Used for scroll-to-bottom on output feature.
-@@ -2794,6 +2796,21 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -311,6 +316,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             pub fn releaseFrame(self: *SwapChain) void {
+                 self.frame_sema.post(global.io());
+             }
++
++            pub fn waitIdle(self: *SwapChain) void {
++                for (0..buf_count) |_| self.frame_sema.waitUncancelable(global.io());
++                for (0..buf_count) |_| self.frame_sema.post(global.io());
++            }
+         };
+ 
+         /// State we need duplicated for every frame. Any state that could be
+@@ -335,6 +345,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             target: Target,
+             /// See property of same name on Renderer for explanation.
+             target_config_modified: usize = 0,
++            content_hash: u64 = 0,
+ 
+             /// Buffer with the vertex data for our background image.
+             ///
+@@ -1541,14 +1552,22 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                 self.draw_mutex.lockUncancelable(global.io());
+                 defer self.draw_mutex.unlock(global.io());
+ 
++                const shown = renderer.cursorStyle(&self.terminal_state, .{
++                    .preedit = critical.preedit != null,
++                    .focused = self.focused,
++                    .blink_visible = true,
++                });
++                const hidden = renderer.cursorStyle(&self.terminal_state, .{
++                    .preedit = critical.preedit != null,
++                    .focused = self.focused,
++                    .blink_visible = false,
++                });
++                self.cursor_blinks = shown != hidden;
++
+                 // Build our GPU cells
+                 self.rebuildCells(
+                     critical.preedit,
+-                    renderer.cursorStyle(&self.terminal_state, .{
+-                        .preedit = critical.preedit != null,
+-                        .focused = self.focused,
+-                        .blink_visible = cursor_blink_visible,
+-                    }),
++                    if (cursor_blink_visible) shown else hidden,
+                     &critical.links,
+                 ) catch |err| {
+                     // This means we weren't able to allocate our buffer
+@@ -1603,6 +1622,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             self.syncDisplayLink(null, null);
+         }
+ 
++        fn contentHash(self: *const Self) u64 {
++            if (!self.cursor_blinks or self.has_custom_shaders or self.bg_image != null or self.overlay != null or
++                self.images.kitty_placements.items.len + self.images.overlay_placements.items.len > 0) return 0;
++            var hash: std.hash.Wyhash = .init(0);
++            hash.update(std.mem.asBytes(&self.uniforms));
++            hash.update(std.mem.sliceAsBytes(self.cells.bg_cells));
++            for (self.cells.fg_rows) |row| hash.update(std.mem.sliceAsBytes(row.items));
++            const atlas = [2]usize{ self.font_grid.atlas_grayscale.modified.load(.monotonic), self.font_grid.atlas_color.modified.load(.monotonic) };
++            hash.update(std.mem.asBytes(&atlas));
++            return hash.final() | 1;
++        }
++
+         /// Draw the frame to the screen.
+         ///
+         /// If `sync` is true, this will synchronously block until
+@@ -1684,11 +1715,23 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                 self.syncDisplayLink(null, null);
+                 return;
+             }
++
++            const content_hash = if (size_changed) 0 else self.contentHash();
++            const last: usize = swap_chain.frame_index;
++            if (content_hash != 0) for ([_]usize{ last, (last + SwapChain.buf_count - 1) % SwapChain.buf_count }) |i| {
++                if (swap_chain.frames[i].content_hash != content_hash) continue;
++                swap_chain.waitIdle();
++                self.cells_rebuilt = false;
++                try self.api.present(swap_chain.frames[i].target, false);
++                self.syncDisplayLink(null, null);
++                return;
++            };
+             self.cells_rebuilt = false;
+ 
+             // Wait for a frame to be available.
+             const frame = swap_chain.nextFrame();
+             errdefer swap_chain.releaseFrame();
++            frame.content_hash = content_hash;
+             // log.debug("drawing frame index={}", .{swap_chain.frame_index});
+ 
+             // If we need to reinitialize our shaders, do so.
+@@ -2629,6 +2672,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                 };
+             }
+ 
++            self.reportEdge();
++
+             // Setup our cursor rendering information.
+             cursor: {
+                 // Clear our cursor by default.
+@@ -2794,6 +2839,25 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              // });
          }
  
-+        fn reportEdge(self: *Self, row: terminal.page.Row, cells: []const terminal.page.Cell, styles: []const terminal.Style) void {
-+            const state = &self.terminal_state;
-+            const default = state.colors.background;
-+            const filled = cells.len > 0 and !rowNeverExtendBg(row, cells, styles, &state.colors.palette, default);
-+            var ends: [2]?terminal.color.RGB = .{ null, null };
-+            if (filled) for (&ends, [2]usize{ 0, cells.len - 1 }) |*end, x| {
-+                const style: terminal.Style = if (cells[x].hasStyling()) styles[x] else .{};
-+                end.* = style.bg(&cells[x], &state.colors.palette);
-+            };
-+            const explicit = filled and ends[0].?.eql(ends[1].?);
-+            const edge: apprt.surface.Message.Edge = .{ .color = if (explicit) ends[0].? else default, .explicit = explicit };
++        fn reportEdge(self: *Self) void {
++            const top, const bottom = self.edge_rows;
++            const explicit = top != null and bottom != null and top.?.eql(bottom.?);
++            const edge: apprt.surface.Message.Edge = .{ .color = if (explicit) top.? else self.terminal_state.colors.background, .explicit = explicit };
 +            if (self.edge) |last| if (last.explicit == edge.explicit and last.color.eql(edge.color)) return;
 +            if (self.surface_mailbox.push(.{ .edge = edge }, .instant) > 0) self.edge = edge;
++        }
++
++        fn edgeRow(self: *Self, row: terminal.page.Row, cells: []const terminal.page.Cell, styles: []const terminal.Style) ?terminal.color.RGB {
++            const state = &self.terminal_state;
++            if (cells.len == 0 or rowNeverExtendBg(row, cells, styles, &state.colors.palette, state.colors.background)) return null;
++            var ends: [2]terminal.color.RGB = undefined;
++            for (&ends, [2]usize{ 0, cells.len - 1 }) |*end, x| {
++                const style: terminal.Style = if (cells[x].hasStyling()) styles[x] else .{};
++                end.* = style.bg(&cells[x], &state.colors.palette).?;
++            }
++            return if (ends[0].eql(ends[1])) ends[0] else null;
 +        }
 +
          fn rebuildRow(
              self: *Self,
              y: terminal.size.CellCountInt,
-@@ -2842,6 +2859,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -2842,6 +2906,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                  },
              }
  
-+            if (y == 0) self.reportEdge(row, cells_raw[0..cells_len], cells_style[0..cells_len]);
++            if (y == 0) self.edge_rows[0] = self.edgeRow(row, cells_raw[0..cells_len], cells_style[0..cells_len]);
++            if (y == self.cells.size.rows - 1) self.edge_rows[1] = self.edgeRow(row, cells_raw[0..cells_len], cells_style[0..cells_len]);
 +
              // Iterator of runs for shaping.
              var run_iter_opts: font.shape.RunOptions = .{

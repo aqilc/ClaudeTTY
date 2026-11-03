@@ -37,7 +37,7 @@ I keep each project in a group and its Claudes as tabs. I color and pin groups, 
 
 ### Modding it
 
-The whole app is about 5,500 lines of Swift in three files, so it's pretty easy to mod. Change something (or ask Claude to), run `./install.sh` and the open window switches to the new build like magic, tabs and all.
+The whole app is about 8,500 lines of Swift in three files, so it's pretty easy to mod. Change something (or ask Claude to), run `./install.sh` and the open window switches to the new build like magic, tabs and all.
 
 <br clear="all"><br>
 
@@ -52,11 +52,13 @@ I made dragging tabs, groups and the sidebar feel right. Dragging the sidebar sh
 Smaller Things I Like
 ---------------------
 
-- Tabs sleep like Chrome's after 20 idle minutes, which saves about 500 MB each, and wake into the same session.
+- Tabs sleep like Chrome's after 20 idle minutes, which saves about 500 MB each, and wake into the same session. Right-click the sidebar for the total.
 - A cold cache turns a sleeping Claude icy cyan. View > Keep Asleep Tabs Warm prevents it.
 - Right-click a tab for its model, effort and context.
-- The sidebar names the background command a Claude is waiting on.
-- Click "3 agents" under a group to watch a subagent work live.
+- The sidebar names the background command a Claude is waiting on, and its Clawd goes fishing.
+- Click "3 subs" under a group to watch a subagent work live.
+- An idle Claude that leaks past 400 MB restarts itself into the same session.
+- Tabs share one copy of each MCP server, so ten Claudes don't start ten Supabase servers.
 - Idle groups show their Claude's last message, so I remember what I was doing.
 - The dots wait a quarter second, so quick file reads don't turn into a strobe light.
 - The tab bar picks up vim's background color, or any app's.

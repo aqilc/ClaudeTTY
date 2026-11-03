@@ -6,7 +6,7 @@ ZIG=/opt/homebrew/opt/zig@0.16/bin/zig
 C=~/Library/Caches/claudetty-deps; mkdir -p $C
 fetch() {
   [[ -d $3/.git ]] || git clone -q https://github.com/$1 $3
-  git -C $3 fetch -q --depth 1 origin $2 && git -C $3 checkout -q $2; }
+  [[ $(git -C $3 rev-parse HEAD 2>/dev/null) == $2 ]] || { git -C $3 fetch -q --depth 1 origin $2 && git -C $3 checkout -q $2; }; }
 fetch ghostty-org/ghostty $GHOSTTY $C/ghostty
 P=${0:A:h}/ghostty.patch; B=$GHOSTTY-$(shasum $P | cut -c1-12)
 [[ -f $C/ghostty/macos/GhosttyKit.xcframework/.built-$B ]] || {

@@ -3,7 +3,7 @@ import AppKit
 
 private enum Shape { case dot(x: Double, y: Double, d: Double), oval(x: Double, y: Double, w: Double, h: Double), ring(d: Double, w: Double),
     quill(outline: Double, stem: Double, rot: Double, dx: Double, dy: Double) }
-private struct Motion { let name: String, inTime: Double, loopTime: Double, yellow: Bool, pose: (Double) -> [Shape], loop: (Double) -> [Shape]
+private struct Motion { let name: String, inTime: Double, loopTime: Double, pose: (Double) -> [Shape], loop: (Double) -> [Shape]
     var outTime: Double? = nil, out: ((Double) -> [Shape])? = nil }
 private struct Phase { let frames: Int, dots: [[[Double]]] }
 
@@ -41,7 +41,7 @@ private func tracked(_ name: String, _ phases: [Phase]) -> Motion {
             return v.count == 4 ? .oval(x: v[0], y: v[1], w: max(v[2], 0), h: max(v[3], 0)) : .dot(x: v[0], y: v[1], d: max(v[2], 0))
         }
     }
-    return Motion(name: name, inTime: Double(phases[0].frames) / 30 * slower, loopTime: Double(phases[1].frames) / 30 * slower, yellow: false,
+    return Motion(name: name, inTime: Double(phases[0].frames) / 30 * slower, loopTime: Double(phases[1].frames) / 30 * slower,
                     pose: { shapes(0, $0) }, loop: { shapes(1, $0) }, outTime: Double(phases[2].frames) / 30 * slower, out: { shapes(2, $0) })
 }
 
@@ -57,7 +57,7 @@ private func feather(_ track: [[Double]], _ u: Double, frames: Double) -> [Shape
 }
 
 private let motions: [Motion] = [
-    Motion(name: "default", inTime: 0.5, loopTime: 1.4, yellow: false, pose: { split($0) }, loop: { t in
+    Motion(name: "default", inTime: 0.5, loopTime: 1.4, pose: { split($0) }, loop: { t in
         let p = inOut(osc(t))
         return [.dot(x: -15 + 4.5 * p, y: 0, d: 8 - 2.2 * p), .dot(x: 0, y: -1.3 * p, d: 5.5 + 2.6 * p), .dot(x: 15 - 4.5 * p, y: 0, d: 8 - 2.2 * p)]
     }),
@@ -67,11 +67,11 @@ private let motions: [Motion] = [
     tracked("write", writeKeys),
     tracked("code", codeKeys),
     tracked("background", codeKeys),
-    Motion(name: "compose", inTime: 16 / 30 * slower, loopTime: 62 / 30 * slower, yellow: false, pose: { feather(featherIn, $0, frames: 16) }, loop: { t in
+    Motion(name: "compose", inTime: 16 / 30 * slower, loopTime: 62 / 30 * slower, pose: { feather(featherIn, $0, frames: 16) }, loop: { t in
         let v = sample(featherSway, t * 62, end: [62] + featherSway[0].dropFirst())
         return [.quill(outline: 1, stem: 1, rot: v[2], dx: v[0], dy: v[1])]
     }, outTime: 12 / 30 * slower, out: { feather(featherOut, $0, frames: 12) }),
-    Motion(name: "blocked", inTime: 0.5, loopTime: 2.4, yellow: true, pose: { u in
+    Motion(name: "blocked", inTime: 0.5, loopTime: 2.4, pose: { u in
         [.dot(x: 0, y: 0, d: lerp(base, 21, back(span(u, 0.15, 1)))), .ring(d: lerp(base, 34, back(span(u, 0, 0.85))), w: lerp(0.8, 2.3, smooth(u)))]
     }, loop: { t in [.dot(x: 0, y: 0, d: 21), .ring(d: 34 + 1.8 * inOut(osc(t)), w: 2.3)] }),
 ]
@@ -105,7 +105,7 @@ final class Marks {
     private struct Track { let frames: [[Shape]], paths: [CGPath] }
     private struct Segment { let name: String, loop: Bool, begin: CFTimeInterval, track: Track }
     private static var tracks: [String: (into: Track, loop: Track, out: Track)] = [:]
-    private static let amber = CGColor(srgbRed: 242 / 255, green: 180 / 255, blue: 78 / 255, alpha: 1)
+    static let amber = CGColor(srgbRed: 242 / 255, green: 180 / 255, blue: 78 / 255, alpha: 1)
     private static let grey = CGColor(srgbRed: 138 / 255, green: 138 / 255, blue: 144 / 255, alpha: 1)
     private let selected: Bool
     private let delay: Double
@@ -458,14 +458,6 @@ extension Marks {
             for animation in animations { animation.duration = seconds }
             shape.add(group, forKey: "rest")
         }
-        func change(_ key: String, _ from: Any, _ to: Any, curve: CAMediaTimingFunction? = nil) -> CABasicAnimation {
-            let change = CABasicAnimation(keyPath: key)
-            change.fromValue = from
-            change.toValue = to
-            change.timingFunction = curve
-            return change
-        }
-        let sine = CAMediaTimingFunction(controlPoints: 0.37, 0, 0.63, 1)
         func keyed(_ key: String, _ keys: [(Double, Any)], seconds: Double, eased: Bool = true) -> CAKeyframeAnimation {
             let animation = CAKeyframeAnimation(keyPath: key)
             animation.values = keys.map(\.1)
@@ -493,7 +485,11 @@ extension Marks {
             return cut.copy(using: &turn)!
         }
         let moon = shape(crescent(4))
-        loop(moon, [change("path", crescent(4), crescent(-4), curve: sine)], seconds: 2.2, back: true)
+        let rock = CABasicAnimation(keyPath: "path")
+        rock.fromValue = crescent(4)
+        rock.toValue = crescent(-4)
+        rock.timingFunction = CAMediaTimingFunction(controlPoints: 0.37, 0, 0.63, 1)
+        loop(moon, [rock], seconds: 2.2, back: true)
         func z(_ u: Double, _ start: (x: Double, y: Double, drift: Double)) -> CGPath {
             let x = start.x + start.drift * u * u * (3 - 2 * u) + 0.8 * sin(2 * .pi * u), y = start.y - 9 * u, half = (5.5 + 2 * u) / 2, path = CGMutablePath()
             path.addLines(between: [at(x - half, y - half), at(x + half, y - half), at(x - half, y + half), at(x + half, y + half)])
@@ -658,8 +654,8 @@ extension Clawd {
                              (0.2, fish, fishing(rest, float, ripple: (1.2, 0.45))), (0.25, fish, fishing(rest, float, ripple: (2.2, 0.2)))]
         acts["background C"] = waiting + nibble + recast
         let bang = union([box(28.2, 7.8, 31.0, 16.2, 1.2), disc(29.6, 19.6, 1.5)])
-        let waving: [Act] = (0..<4).map { k -> Act in (0.2, Stance(arms: (k % 2 == 0 ? "high" : "lift", "drop")), [prop(moved(bang, k % 2 == 0 ? -1.2 : 0), "amber")]) }
-        acts["blocked"] = waving + [(0.6, Stance(arms: ("out", "drop")), [prop(bang, "amber")])]
+        let waving: [Act] = (0..<4).map { k -> Act in (0.2, Stance(arms: (k % 2 == 0 ? "high" : "lift", "drop")), [prop(moved(bang, k % 2 == 0 ? -1.2 : 0))]) }
+        acts["blocked"] = waving + [(0.6, Stance(arms: ("out", "drop")), [prop(bang)])]
         return acts
     }()
     private static var drawn: [String: (images: [CGImage], seconds: [Double], still: Int)] = [:]
@@ -667,7 +663,7 @@ extension Clawd {
     static func act(_ layer: CALayer, _ name: String, ink: String, since: CFTimeInterval) -> Double {
         layer.removeAllAnimations()
         let key = name + " " + ink, (images, seconds, still) = drawn[key] ?? {
-            let script = acts[name] ?? acts["default"]!, made = (script.map { draw($0, ink: ink) }, script.map(\.seconds), script.indices.max { script[$0].props.count < script[$1].props.count }!)
+            let script = acts[name] ?? acts["default"]!, made = (script.map { draw($0, ink: ink, waiting: name == "blocked") }, script.map(\.seconds), script.indices.max { script[$0].props.count < script[$1].props.count }!)
             drawn[key] = made
             return made
         }()
@@ -681,7 +677,8 @@ extension Clawd {
         return loop.duration - loop.timeOffset
     }
 
-    private static func draw(_ act: Act, ink: String) -> CGImage {
+    private static func draw(_ act: Act, ink: String, waiting: Bool) -> CGImage {
+        let amber = Marks.amber.components!.prefix(3).map { Double($0) * 255 }
         var cells = [UInt8](repeating: 0, count: 32 * 34)
         let body = act.body, top = 14 - body.lift
         func cell(_ x: Int, _ y: Int, _ kind: UInt8) { if (0..<32).contains(x), (0..<34).contains(y) { cells[y * 32 + x] = kind } }
@@ -701,7 +698,7 @@ extension Clawd {
         }
         var cover = [(ink: [Double], alpha: Double)?](repeating: nil, count: 32 * 34)
         for p in act.props {
-            let color: [Double] = ink == "selected" ? [255.0, 255, 255] : p.ink == "grey" ? [138, 138, 144] : p.ink == "amber" ? [242, 180, 78] : ink == "dark" ? [255, 255, 255] : [24, 24, 26]
+            let color: [Double] = ink == "selected" ? [255.0, 255, 255] : p.ink == "grey" ? [138, 138, 144] : ink == "dark" ? [255, 255, 255] : [24, 24, 26]
             for y in 0..<34 {
                 for x in 0..<32 where p.field(Double(x) + 0.5, Double(y) + 0.5) <= 1.2 {
                     let hits = (0..<9).filter { p.field(Double(x) + (Double($0 % 3) + 0.5) / 3, Double(y) + (Double($0 / 3) + 0.5) / 3) <= 0 }.count
@@ -711,7 +708,7 @@ extension Clawd {
         }
         var bytes = [UInt8](repeating: 0, count: 32 * 34 * 4)
         for index in 0..<32 * 34 {
-            let under: [Double]? = cells[index] == 1 ? [215, 119, 87] : cells[index] == 2 ? [20, 20, 20] : nil
+            let under: [Double]? = cells[index] == 1 ? waiting ? amber : [215, 119, 87] : cells[index] == 2 ? [20, 20, 20] : nil
             let pixel: [Double] = switch (under, cover[index]) {
             case let (under?, ink?): under.indices.map { Double(Int(under[$0] + (ink.ink[$0] - under[$0]) * ink.alpha)) } + [255]
             case let (under?, nil): under + [255]

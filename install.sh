@@ -2,6 +2,7 @@
 set -euo pipefail
 APP=${APP:-/Applications/ClaudeTTY.app}
 cd ${0:A:h}
+./deps.sh
 IDS=$(security find-identity -v -p codesigning)
 SIGN=${CLAUDETTY_SIGN:-$(sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' <<<$IDS | head -1)}
 SIGN=${SIGN:-$(sed -n 's/.*"\(Apple Development: .*\)"/\1/p' <<<$IDS | head -1)}
@@ -28,7 +29,7 @@ M=$APP.new/Contents/Resources/plugin; mkdir -p $M/.claude-plugin; cp -R plugin $
 print '{"name":"claudetty","owner":{"name":"ClaudeTTY"},"plugins":[{"name":"claudetty","source":"./claudetty"}]}' > $M/.claude-plugin/marketplace.json
 plutil -replace version -string $(cd plugin && find . -type f | sort | xargs cat | shasum | cut -c1-12) $M/claudetty/.claude-plugin/plugin.json
 P=$APP.new/Contents/Info.plist; plutil -create xml1 $P
-for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.0 CFBundleVersion 3 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
+for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.1 CFBundleVersion 4 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
 [[ -n ${CLAUDETTY_RELEASE-} ]] || plutil -insert ClaudeTTYSource -string $PWD $P
 for k in AppBundles AppData AppleEvents AppleMusic AudioCapture BluetoothAlways BluetoothWhileInUse Calendars CalendarsFullAccess CalendarsWriteOnlyAccess \
   Camera Contacts DesktopFolder DocumentsFolder DownloadsFolder FaceID FileProviderDomain FileProviderPresence FinancialData FocusStatus HomeKit LocalNetwork \

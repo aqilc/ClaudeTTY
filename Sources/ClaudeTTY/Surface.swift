@@ -2,6 +2,7 @@
 import AppKit
 import Carbon
 import GhosttyKit
+import SwiftUI
 
 final class SurfaceView: NSView, NSTextInputClient {
     private(set) var surface: ghostty_surface_t?
@@ -21,6 +22,16 @@ final class SurfaceView: NSView, NSTextInputClient {
     private(set) var scrolled: UInt64 = 0
     private var restoring = false
     private var settle: DispatchWorkItem?
+    private var badge: NSView?
+    var readonly = false {
+        didSet {
+            guard readonly != oldValue else { return }
+            badge?.removeFromSuperview()
+            badge = readonly ? NSHostingView(rootView: ReadonlyBadge { [weak self] in self?.binding("toggle_readonly") }) : nil
+            badge.map(addSubview)
+            placeBadge()
+        }
+    }
 
     init(app: ghostty_app_t, command: String, cwd: String) {
         super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
@@ -76,6 +87,7 @@ final class SurfaceView: NSView, NSTextInputClient {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         layer?.contentsGravity = .topLeft
+        placeBadge()
         guard let surface else { return }
         let scaled = convertToBacking(newSize)
         ghostty_surface_set_size(surface, UInt32(scaled.width), UInt32(scaled.height))
@@ -116,6 +128,14 @@ final class SurfaceView: NSView, NSTextInputClient {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil { focusDidChange(false) }
         super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToSuperview() { placeBadge() }
+
+    private func placeBadge() {
+        guard let badge else { return }
+        let size = badge.fittingSize
+        badge.frame = NSRect(x: bounds.width - size.width - 8, y: min(bounds.height, superview?.bounds.height ?? .infinity) - size.height - 8, width: size.width, height: size.height)
     }
 
     func focusDidChange(_ focused: Bool) {
@@ -178,11 +198,6 @@ final class SurfaceView: NSView, NSTextInputClient {
         if tabItems?().claude != true, !mouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, event) { super.rightMouseUp(with: event) }
     }
 
-    private func sendMousePos(_ x: Double, _ y: Double, _ event: NSEvent) {
-        guard let surface else { return }
-        ghostty_surface_mouse_pos(surface, x, y, ghosttyMods(event.modifierFlags))
-    }
-
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         mouseMoved(with: event)
@@ -191,12 +206,12 @@ final class SurfaceView: NSView, NSTextInputClient {
     override func mouseExited(with event: NSEvent) {
         if NSEvent.pressedMouseButtons != 0 { return }
         NSCursor.arrow.set()
-        sendMousePos(-1, -1, event)
+        if let surface { ghostty_surface_mouse_pos(surface, -1, -1, ghosttyMods(event.modifierFlags)) }
     }
 
     override func mouseMoved(with event: NSEvent) {
         let pos = convert(event.locationInWindow, from: nil)
-        sendMousePos(pos.x, frame.height - pos.y, event)
+        if let surface { ghostty_surface_mouse_pos(surface, pos.x, frame.height - pos.y, ghosttyMods(event.modifierFlags)) }
     }
 
     override func mouseDragged(with event: NSEvent) { mouseMoved(with: event) }
@@ -354,8 +369,6 @@ final class SurfaceView: NSView, NSTextInputClient {
         guard let surface else { return false }
         var keyEvent = ghostty_input_key_s()
         keyEvent.action = action
-        keyEvent.mods = GHOSTTY_MODS_NONE
-        keyEvent.consumed_mods = GHOSTTY_MODS_NONE
         return text.withCString { ptr in
             keyEvent.text = ptr
             return ghostty_surface_key(surface, keyEvent)
@@ -513,6 +526,52 @@ final class SurfaceView: NSView, NSTextInputClient {
         } else if clearIfNeeded {
             ghostty_surface_preedit(surface, nil, 0)
         }
+    }
+}
+
+struct ReadonlyBadge: View {
+    let onDisable: () -> Void
+    @State private var showingPopover = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "eye.fill").font(.system(size: 12))
+            Text("Read-only").font(.system(size: 12, weight: .medium))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(.regularMaterial).overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.orange.opacity(0.6), lineWidth: 1.5)))
+        .foregroundStyle(Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(hue: 0.08, saturation: 0.5, brightness: 0.8, alpha: 1) : NSColor(hue: 0.08, saturation: 0.7, brightness: 0.6, alpha: 1) }))
+        .onTapGesture { showingPopover = true }
+        .pointerStyle(.link)
+        .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "eye.fill").foregroundColor(.orange).font(.system(size: 13))
+                        Text("Read-only").font(.system(size: 13, weight: .semibold))
+                    }
+                    Text("Typing, clicks and pastes don't reach this terminal. You can still select, copy and scroll.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Spacer()
+                    Button("Turn Off") {
+                        onDisable()
+                        showingPopover = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+            .padding(16)
+            .frame(width: 280)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Read-only terminal")
     }
 }
 

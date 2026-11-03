@@ -21,9 +21,13 @@ fi
 [ -n "$ZMX_SESSION" ] || exit 0
 input=$(cat)
 [ "$1" = working ] && printf %s "$input" | jq -e 'has("agent_id")' >/dev/null 2>&1 && exit 0
-case "$1" in idle|agent|"") event=$(printf %s "$input" | jq -r .hook_event_name);; esac
+case "$1" in idle|agent|compact*|"") event=$(printf %s "$input" | jq -r .hook_event_name);; esac
 [ -d "$dir" ] || mkdir -p "$dir"
 status=; { read -r status < "$dir/$ZMX_SESSION"; } 2>/dev/null
+case "$1" in
+  compacting) printf %s "$status" > "$dir/.$ZMX_SESSION.compact"; set -- working;;
+  compacted) before=; { read -r before < "$dir/.$ZMX_SESSION.compact"; } 2>/dev/null; rm -f "${dir:?}/.$ZMX_SESSION.compact"; set -- "$([ "$before" = working ] && echo working || echo idle)";;
+esac
 if [ "$1" = notify ]; then
   if "$HOME/.local/bin/zmx" get "$ZMX_SESSION" | tr ' \t' '\n\n' | grep -qx notify=0; then
     printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"muted in ClaudeTTY; don'"'"'t retry"}}'
@@ -34,7 +38,7 @@ if [ "$1" = notify ]; then
   exit 0
 fi
 case "$event/$1" in SessionStart/*|SessionEnd/*|Stop/*|SubagentStart/*|SubagentStop/*|*/working) ;; *) [ "$status" = "$1" ] && exit 0;; esac
-case "$1" in working) line=Thinking;; action|waiting)
+case "$1" in working) line=$([ "$event" = PreCompact ] && echo Compacting || echo Thinking);; action|waiting)
   [ "$1" = action ] && [ "$status" = waiting ] && exit 0
   line=$(printf %s "$input" | jq -j --arg kind "$1" '.tool_name as $tool | (.tool_input.command // "" | sub("^\\s*cd [^;&|]*(;|&&)\\s*"; "")) as $run
     | (if $tool != "Bash" then $tool elif $run | test("^(rg|grep|fd|find|mdfind|ls|tree|\\S*/map)\\b") then "Grep" elif $run | test("^(cat|head|tail|sed -n|less|bat)\\b") then "Read" else $tool end) as $dots | (if $kind == "action" and (.tool_name | IN("AskUserQuestion", "ExitPlanMode")) then empty
@@ -65,21 +69,30 @@ fi
 agents="$dir/$ZMX_SESSION.agents"
 if [ -n "$event" ]; then
 old=$(cat "$agents" 2>/dev/null)
-new=$(printf %s "$input" | jq -r --arg old "$old" --arg now "$(date +%s)" '
-  ($old | split("\n") | map(select(. != "") | split("\t"))) as $rows
+waiting=
+case "$event" in SubagentStop|Stop)
+  ids=$(printf %s "$input" | jq -r '(.background_tasks // [])[] | select(.type != "subagent") | .id')
+  [ -n "$ids" ] && waiting=$(printf '%s\n' "$old" | while IFS="$(printf '\t')" read -r kind id _ path; do
+    [ "$kind" = agent ] && printf '%s\n' "$ids" | grep -qFf - "$path" 2>/dev/null && printf '%s ' "$id"
+  done);;
+esac
+new=$(printf %s "$input" | jq -r --arg old "$old" --arg now "$(date +%s)" --arg waiting "$waiting" '
+  ($old | split("\n") | map(select(. != "") | split("\t"))) as $rows | ($waiting | split(" ")) as $kept
   | (.transcript_path // "" | rtrimstr(".jsonl")) as $base
   | def agent($id): ["agent", $id, $now, "\($base)/subagents/agent-\($id).jsonl"];
   if .hook_event_name == "SubagentStart" then
     .agent_id as $id | if (.agent_type // "") == "" or any($rows[]; .[1] == $id) then $rows else $rows + [agent($id)] end
-  elif .hook_event_name == "SubagentStop" then .agent_id as $id | $rows | map(select(.[1] != $id))
+  elif .hook_event_name == "SubagentStop" then .agent_id as $id | if $id | IN($kept[]) then $rows else $rows | map(select(.[1] != $id)) end
   elif .hook_event_name == "Stop" then
     [(.background_tasks // [])[] as $task | first(($rows[] | select(.[1] == $task.id)), if $task.type == "subagent" then agent($task.id) else ["shell", $task.id, $now, ($task.command // $task.description // "" | gsub("[\t\n]"; " "))] end)]
+    | . as $synced | $synced + [$rows[] | select(.[1] | IN($kept[])) | select(.[1] as $id | all($synced[]; .[1] != $id))]
   elif .hook_event_name == "SessionStart" and .source == "compact" then $rows
   elif .hook_event_name == "SessionStart" or .hook_event_name == "SessionEnd" then []
   else $rows end
   | map(join("\t") + "\n") | add // ""')
 [ "$new" = "$old" ] || { printf '%s\n' "$new" > "$agents.tmp" && mv "$agents.tmp" "$agents"; }
 fi
+[ "$event" = SessionStart ] && [ "$(printf %s "$input" | jq -r .source)" = compact ] && exit 0
 [ "$1" = idle ] && rm -f "$dir/$ZMX_SESSION.action"
 case "$1" in working|action|waiting)
   [ "$1" = waiting ] && last=$(head -n 1 "$dir/$ZMX_SESSION.action" 2>/dev/null)
