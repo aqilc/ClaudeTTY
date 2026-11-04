@@ -187,17 +187,28 @@
   /* comments go under their command where ~80 columns don't fit */
   @media (max-width: 1279px) { pre { white-space: pre-wrap; } pre em { display: block; margin-bottom: 6px; } }
 
-  /* A: the page sits on the wallpaper like the app on a desktop: a frosted sidebar and a frosted pane, both blurring it */
+  /* A: the page sits on the wallpaper like the app on a desktop: a frosted sidebar and a frosted pane over it.
+     The frost is the wallpaper blurred and saturated ahead of time, as blur(40px) saturate(1.8) would at the band's window size
+     (40px is fixed but the wallpaper scales with its cover width, max(100vw, 150vh)): a live backdrop-filter re-blurred
+     the whole window on every scroll frame and every GIF or mark frame. */
   html { background: #2a2522; }
+  :root { --frost: url(media/frost.jpg); }
+  @media (max-width: 1649px) and (max-height: 1099px) { :root { --frost: url(media/frost-s.jpg); } }
+  @media (min-width: 2600px), (min-height: 1734px) { :root { --frost: url(media/frost-l.jpg); } }
   body { background: none; }
   body::before { content: ''; position: fixed; inset: 0; z-index: -1; background: url(media/sunset.jpg) center 35% / cover; }
   @media (min-width: 1001px) {
-    aside { inset: 10px auto 10px 10px; border-radius: 18px; background: color-mix(in srgb, var(--side) 50%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); box-shadow: 0 0 0 .5px rgba(0,0,0,.18), 0 10px 40px rgba(0,0,0,.18); }
-    main { margin: 10px 10px 10px 288px; border-radius: 18px; background: color-mix(in srgb, var(--ground) 84%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); box-shadow: 0 0 0 .5px rgba(0,0,0,.18); }
+    aside { inset: 10px auto 10px 10px; border-radius: 18px; background: linear-gradient(color-mix(in srgb, var(--side) 50%, transparent) 0 0), var(--frost) calc((100vw - max(100vw, 150vh)) / 2 - 10px) calc((100vh - max(66.667vw, 100vh)) * .35 - 10px) / max(100vw, 150vh) max(66.667vw, 100vh) no-repeat; box-shadow: 0 0 0 .5px rgba(0,0,0,.18), 0 10px 40px rgba(0,0,0,.18); }   /* the 3:2 wallpaper's cover box, shifted by the aside's offset */
+    /* a fixed layer in the pane's frame: the tinted pane scrolls over it and nothing repaints */
+    body::after { content: ''; position: fixed; inset: 10px 10px 10px 288px; z-index: -1; border-radius: 18px; background: var(--frost) center 35% / cover fixed; animation: pane-top linear both, pane-bottom linear both; animation-timeline: scroll(), scroll(); animation-range: 0 28px, calc(100% - 28px) 100%; }
+    /* the frost's edges ride the pane's top and bottom (10px margin + 18px corner) as they scroll past the window edge */
+    @keyframes pane-top { to { top: -18px; } }
+    @keyframes pane-bottom { from { bottom: -18px; } }
+    /* the light sidebar's glow that the live blur carried into the pane's left edge */
+    main { margin: 10px 10px 10px 288px; border-radius: 18px; background: linear-gradient(to right, light-dark(#fff6, #0000), light-dark(#ffffff1f, #0000) 12px, #0000 32px), color-mix(in srgb, var(--ground) 84%, transparent); box-shadow: 0 0 0 .5px rgba(0,0,0,.18); }
   }
   @media (max-width: 1000px) {
-    /* a backdrop-filter on the page-tall main fails in WebKit and starves the rows nested in it: blur the fixed wallpaper itself */
-    body::before { inset: -80px; filter: blur(40px) saturate(1.8); }
+    body::before { background-image: var(--frost); }
     main { background: color-mix(in srgb, var(--ground) 86%, transparent); }
     main a.row { background: color-mix(in srgb, var(--side) 55%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); }
     aside.open { background: color-mix(in srgb, var(--side) 60%, transparent); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); }
@@ -724,6 +735,9 @@ fetch('media/marks.json').then(r => r.json()).then(tracks => {
     show(p, p.cur);
     p.pills.forEach(b => b.addEventListener('click', () => { p.pending = b.dataset.to; p.pills.forEach(x => x.classList.toggle('on', x === b)); }));
   }
+  // the loop runs only while a mark is on screen, as it would in a background tab
+  const shown = new Set();
+  let frame = 0;
   const tick = now => {
     for (const p of players) {
       if (p.cycle) { p.path.setAttribute('d', step(p, now)); continue; }
@@ -733,18 +747,27 @@ fetch('media/marks.json').then(r => r.json()).then(tracks => {
       p.path.setAttribute('d', p.frames[f]);
       p.el.style.color = inks[p.el.dataset.m] || '';
     }
-    requestAnimationFrame(tick);
+    frame = shown.size ? requestAnimationFrame(tick) : 0;
   };
-  requestAnimationFrame(tick);
+  const watch = new IntersectionObserver(entries => {
+    entries.forEach(e => e.isIntersecting ? shown.add(e.target) : shown.delete(e.target));
+    if (shown.size && !frame) frame = requestAnimationFrame(tick);
+  });
+  players.forEach(p => watch.observe(p.el));
 });
 
 // The clips share one window: a chapter plays its clip once, then the next; a click picks one.
 const chapters = [...document.querySelectorAll('.chapters button')], screen = document.querySelector('.player img');
 let playing;
+const clips = {};   // each clip downloads once; a fresh blob URL restarts it from its first frame
 const play = i => {
   const ch = chapters[i];
   chapters.forEach(c => { c.classList.toggle('on', c === ch); c.querySelector('i').getAnimations().forEach(a => a.cancel()); });
-  screen.src = ch.dataset.src + '?' + Date.now();
+  (clips[ch.dataset.src] ??= fetch(ch.dataset.src).then(r => r.blob())).then(blob => {
+    if (!ch.classList.contains('on')) return;
+    URL.revokeObjectURL(screen.src);
+    screen.src = URL.createObjectURL(blob);
+  });
   screen.alt = ch.querySelector('b').textContent;
   if (still.matches) return;
   playing = ch.querySelector('i').animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { duration: +ch.dataset.ms, easing: 'linear' });
