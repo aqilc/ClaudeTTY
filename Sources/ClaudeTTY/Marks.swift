@@ -496,7 +496,7 @@ extension Marks {
             return path
         }
         let steps = (0...12).map { Double($0) / 12 }
-        let starts = [(9.0, -6.0, 0.0), (18, -7, 1), (8, -9, 0), (19, -5, 1)], cycle = 1.5 * Double(starts.count)
+        let starts = [(7.0, -4.0, 0.0), (16, -5, 1), (6, -7, 0), (17, -3, 1)], cycle = 1.5 * Double(starts.count)
         let zs = starts.enumerated().map { index, start in
             let mark = shape(z(moving ? 0 : 0.4, start), opacity: moving ? 0 : 1, line: 1.8)
             let rise = keyed("path", steps.map { ($0 * 3, z($0, start)) } + [(cycle, z(1, start))], seconds: cycle, eased: false)
