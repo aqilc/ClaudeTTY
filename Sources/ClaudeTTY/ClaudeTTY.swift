@@ -235,6 +235,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var recent: [String] = []
     private static let soundKey = "notification sound " + zmxDir
     private static let secureKey = "secure keyboard entry " + zmxDir
+    private static let linksKey = "ct links " + zmxDir
     private var securing = false
     private static let hotkeyKey = "show and hide hotkey " + zmxDir
     private static let hotkeys = [("⌥Space", kVK_Space, optionKey), ("⌃`", kVK_ANSI_Grave, controlKey)]
@@ -244,6 +245,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private static let collapsedKey = "collapsed folders " + zmxDir
     private static let buttonsKey = "hide pane buttons " + zmxDir
     private static let askKey = "claude asks permission " + zmxDir
+    private static let classicKey = "classic renderer " + zmxDir
     private static let wakeKey = "no idle sleep " + zmxDir
     private static let warmKey = "keep asleep tabs warm " + zmxDir
     private static let contextKey = "hide context size " + zmxDir
@@ -325,7 +327,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private static let port = "dev.claudetty.app" + (probe.map { "." + $0 } ?? "") as CFString
     private static var server: CFMessagePort?
     private static let keeperPort = "dev.claudetty.keeper" + (probe.map { "." + $0 } ?? "") as CFString
-    private static let kept: Set = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING", "ZMX_DIR", "CLAUDETTY_PROBE", "CLAUDETTY_RELEASES"]
+    private static let kept: Set = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING", "ZMX_DIR", "CLAUDETTY_PROBE", "CLAUDETTY_RELEASES", "XDG_CONFIG_HOME"]
     static let executable = URL(fileURLWithPath: Bundle.main.executablePath!).resolvingSymlinksInPath().path
     private static let bundle = URL(fileURLWithPath: executable).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
     private static let released = bundle.hasSuffix(".app") && Bundle(path: bundle)?.object(forInfoDictionaryKey: "ClaudeTTYSource") == nil
@@ -386,7 +388,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 print("""
                 ct <group> [<tab> [command…]]               open a tab, or move a live one to <group>
                 ct split <tab> right|down|left|up <name> [command…]
-                ct list [--json] | events | wait <tab> <state> | focus <tab> | prompt <tab> | notify <text> | reload
+                ct list [--json] | events | wait <tab> <state> | focus <tab> | prompt <tab> | restart <tab> | notify <text> | reload
                 """)
                 exit(0)
             case let flag? where flag.hasPrefix("-"): exit(failed("doesn't know \(flag). ct help lists its commands"))
@@ -398,6 +400,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         if let ready { close(ready) }
         unsetenv("CLAUDETTY_READY")
         guard listening else { exit(0) }
+        fullscreen()
         setenv("GHOSTTY_RESOURCES_DIR", bundled ? contents + "/Resources/ghostty" : deps + "/ghostty/zig-out/share/ghostty", 0)
         guard ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS else { fatalError("ghostty_init failed") }
         let app = NSApplication.shared
@@ -721,6 +724,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(link(_:)), forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+        DispatchQueue.global(qos: .utility).async { _ = Self.loginPath }
         if Self.disclaims(Self.executable, probe: probe) {
             Self.keep()
             if bundled { DispatchQueue.global(qos: .utility).async(execute: Self.settle) }
@@ -749,7 +754,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
 
         tabs = Self.sessions()
         let restored = (Self.saved?.tabs ?? []).filter { !tabs.contains($0) && (Self.saved?.boot != Self.boot || $0.labels["sleep"] != nil || Self.saved?.asleep?[$0.name] != nil) }
-        for tab in restored { commands[tab.name] = Self.saved?.asleep?[tab.name] ?? Self.saved?.resume?[tab.name].map { Self.claude((Self.saved?.flags?[tab.name] ?? Self.bypass) + " --resume " + $0) } }
+        for tab in restored { commands[tab.name] = Self.saved?.asleep?[tab.name] ?? Self.saved?.resume?[tab.name].map { Self.claude((Self.saved?.flags?[tab.name] ?? Self.bypass) + Self.resume(tab, $0)) } }
         tabs += restored
         if !restored.isEmpty, let kept = Self.saved?.kept {
             let place = Dictionary(kept.enumerated().map { ($1.name, $0) }) { first, _ in first }
@@ -886,6 +891,16 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 if (try? swap.run()) == nil { newer?.swap = .failed }
             }
         }.resume()
+    }
+
+    @objc private func link(_ event: NSAppleEventDescriptor) {
+        let query = URLComponents(string: event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue ?? "")?.queryItems ?? []
+        let name = query.first { $0.name == "tab" }?.value, text = String(String.UnicodeScalarView((query.first { $0.name == "text" }?.value ?? "").unicodeScalars.filter { $0.properties.generalCategory != .control }))
+        guard UserDefaults.standard.bool(forKey: Self.linksKey), !text.isEmpty, let tab = tabs.first(where: { $0.name == name }) else { return NSSound.beep() }
+        let claude = Self.list().first { $0["name"] == name }?["pid"].flatMap(Int32.init).map(isClaude) == true
+        guard let draft = claude ? Self.prompt(tab.name) : "" else { return NSSound.beep() }
+        _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", tab.name, claude ? "\u{1B}[200~" + (draft.isEmpty ? "" : "\n") + text + "\u{1B}[201~" : text])
+        open(["args": [tab.group, tab.name], "focus": true])
     }
 
     @objc private func pickUpdate() {
@@ -1153,6 +1168,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         var args = request["args"] as? [String] ?? []
         let cwd = request["cwd"] as? String ?? NSHomeDirectory()
         let focus = request["focus"] as? Bool ?? false
+        if args.first == "restart", args.count == 2 { return restart(args[1]) }
         if args.first == "split" {
             guard let from = tabs.first(where: { $0.name == args[1] }) else { return "split: no tab \(args[1])" }
             if !tabs.contains(where: { $0.name == args[3] }) {
@@ -1507,7 +1523,14 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let main = NSMenu()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Bypass Permissions in New Claude Tabs", action: #selector(toggleBypass), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Fullscreen in New Claude Tabs", action: #selector(toggleClassic), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Sleep Idle Tabs", action: #selector(toggleSleep), keyEquivalent: "")
+        let warm = NSMenu(title: "Keep Asleep Tabs Warm")
+        for title in ["Off", "1 Hour", "6 Hours"] { warm.addItem(withTitle: title, action: #selector(pickWarm), keyEquivalent: "") }
+        appMenu.addItem(withTitle: "Keep Asleep Tabs Warm", action: nil, keyEquivalent: "").submenu = warm
+        appMenu.addItem(withTitle: "Share MCP Servers", action: #selector(toggleShare), keyEquivalent: "")
         appMenu.addItem(withTitle: "Secure Keyboard Entry", action: #selector(toggleSecure), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Allow ct:// Links", action: #selector(toggleLinks), keyEquivalent: "")
         let hotkeys = NSMenu(title: "Show and Hide Hotkey")
         for title in ["Off"] + Self.hotkeys.map(\.0) { hotkeys.addItem(withTitle: title, action: #selector(pickHotkey), keyEquivalent: "") }
         appMenu.addItem(withTitle: "Show and Hide Hotkey", action: nil, keyEquivalent: "").submenu = hotkeys
@@ -1516,6 +1539,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         Self.sounds(sounds, action: #selector(pickSound))
         sounds.addItem(withTitle: "Add Sound…", action: #selector(addSound), keyEquivalent: "")
         appMenu.addItem(withTitle: "Notification Sound", action: nil, keyEquivalent: "").submenu = sounds
+        appMenu.addItem(withTitle: "Open Ghostty Config", action: #selector(openConfig), keyEquivalent: ",")
+        appMenu.addItem(withTitle: "Reload Ghostty Config", action: #selector(reloadConfig), keyEquivalent: ",").keyEquivalentModifierMask = [.command, .shift]
         if Self.released { appMenu.addItem(withTitle: "Check for Updates", action: #selector(pickUpdate), keyEquivalent: "") }
         appMenu.addItem(withTitle: "Set Up ClaudeTTY…", action: #selector(setUp), keyEquivalent: "")
         appMenu.addItem(.separator())
@@ -1542,7 +1567,6 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         old.allowsKeyEquivalentWhenHidden = true
         view.addItem(withTitle: "Go to Tab…", action: #selector(goToTab), keyEquivalent: "p")
         view.addItem(withTitle: "Next Waiting Tab", action: #selector(nextWaiting), keyEquivalent: "U")
-        view.addItem(withTitle: "Rename Group", action: #selector(renameSelected), keyEquivalent: "R")
         view.addItem(.separator())
         let theme = NSMenu(title: "Theme")
         for title in ["Light", "Dark", "System"] { theme.addItem(withTitle: title, action: #selector(pickTheme), keyEquivalent: "") }
@@ -1570,12 +1594,6 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         for title in ["Off", "On Hover", "Always"] { buttons.addItem(withTitle: title, action: #selector(pickPaneButtons), keyEquivalent: "") }
         view.addItem(withTitle: "Pane Buttons", action: nil, keyEquivalent: "").submenu = buttons
         view.addItem(.separator())
-        view.addItem(withTitle: "Sleep Idle Tabs", action: #selector(toggleSleep), keyEquivalent: "")
-        let warm = NSMenu(title: "Keep Asleep Tabs Warm")
-        for title in ["Off", "1 Hour", "6 Hours"] { warm.addItem(withTitle: title, action: #selector(pickWarm), keyEquivalent: "") }
-        view.addItem(withTitle: "Keep Asleep Tabs Warm", action: nil, keyEquivalent: "").submenu = warm
-        view.addItem(withTitle: "Share MCP Servers", action: #selector(toggleShare), keyEquivalent: "")
-        view.addItem(.separator())
         view.addItem(withTitle: "Character Perfect Sizing", action: #selector(toggleFreeSize), keyEquivalent: "")
         view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen), keyEquivalent: "f").keyEquivalentModifierMask = [.control, .command]
         let file = NSMenu(title: "File")
@@ -1584,6 +1602,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                                                 ("Close Tab", "close_surface", "w", [.command]), ("Close Group", "close_window", "W", [.command])] as [(String, String, String, NSEvent.ModifierFlags)] {
             add(file, title, #selector(fileAction), action, key: key).keyEquivalentModifierMask = modifiers
         }
+        file.insertItem(withTitle: "Rename Group", action: #selector(renameSelected), keyEquivalent: "R", at: 4)
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom), keyEquivalent: "")
@@ -1761,7 +1780,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             terminal.layoutSubtreeIfNeeded()
             even(root)
         }
-        var now: Set<String> = []
+        var now: Set<String> = [], came: Set<String> = []
         for (id, pane) in panes {
             let tab = shownTab(selected.group, id, in: layout)
             let view = surfaces[tab.name] ?? makeSurface(tab)
@@ -1770,10 +1789,11 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 view.isHidden = false
                 pane.body.addSubview(view)
                 pane.body.fit()
+                came.insert(tab.name)
             }
             now.insert(tab.name)
         }
-        let left = placed.subtracting(now), came = now.subtracting(placed), launch = placed.isEmpty
+        let left = placed.subtracting(now), launch = placed.isEmpty
         for name in left { surfaces[name]?.setVisible(false) }
         for name in came { surfaces[name]?.setVisible(drawing) }
         placed = now
@@ -1809,6 +1829,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let asking = window.attachedSheet != nil || typing || guide != nil
         let groups = item.action == #selector(pickGroup) || item.action == #selector(pickTab)
         if item.action == #selector(toggleSecure) { item.state = UserDefaults.standard.bool(forKey: Self.secureKey) ? .on : .off }
+        if item.action == #selector(toggleLinks) { item.state = UserDefaults.standard.bool(forKey: Self.linksKey) ? .on : .off }
         if item.action == #selector(pickHotkey) { item.state = item.title == UserDefaults.standard.string(forKey: Self.hotkeyKey) ?? "Off" ? .on : .off }
         if item.action == #selector(pickSound) { item.state = item.representedObject as? String == UserDefaults.standard.string(forKey: Self.soundKey) ?? "Glass" ? .on : .off }
         if item.action == #selector(pickSpinner), let pick = item.representedObject as? [String] {
@@ -1823,6 +1844,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             if pick["background-blur"] != nil, Self.look["background-opacity"] == "1" { return false }
         }
         if item.action == #selector(toggleBypass) { item.state = UserDefaults.standard.bool(forKey: Self.askKey) ? .off : .on }
+        if item.action == #selector(toggleClassic) { item.state = UserDefaults.standard.bool(forKey: Self.classicKey) ? .off : .on }
         if item.action == #selector(pickUpdate) {
             item.title = switch newer?.swap {
             case nil: "Check for Updates"
@@ -1939,9 +1961,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private static let attached = ["sh", "-c", "i=0; until [ -n \"$(\"$0\" print-env \"$ZMX_SESSION\")\" ] || [ $i -ge 100 ]; do sleep 0.05; i=$((i+1)); done; exec \"$@\"", zmx]
     private static var bypass: String { UserDefaults.standard.bool(forKey: askKey) ? "" : "--dangerously-skip-permissions" }
     private static let program = probe.flatMap { FileManager.default.isExecutableFile(atPath: $0 + "/claude") ? $0 + "/claude" : nil } ?? "claude"
-    private static func claude(_ args: String, program: String = program) -> [String] { ["zsh", "-lic", "exec env BUN_OPTIONS=--smol " + program + share(args) + (light ? " --settings '{\"theme\":\"light\"}' " : " ") + args] }
+    private static func claude(_ args: String, program: String = program) -> [String] { ["zsh", "-lic", "exec env BUN_OPTIONS=--smol " + (UserDefaults.standard.bool(forKey: classicKey) ? "" : "CLAUDE_CODE_NO_FLICKER=1 ") + program + share(args) + (light ? " --settings '{\"theme\":\"light\"}' " : " ") + args] }
     private static func share(_ args: String) -> String { args.contains("--mcp-config") || args.contains("--strict-mcp-config") ? "" : " $(" + quoted(executable) + " --share-flag)" }
     private static func quoted(_ word: String) -> String { "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+    private static func resume(_ tab: Tab, _ session: String) -> String { tab.transcript.map(FileManager.default.fileExists(atPath:)) == false ? "" : " --resume " + quoted(session) }
     private static let boot: Int = {
         var time = timeval(), size = MemoryLayout<timeval>.size
         sysctlbyname("kern.boottime", &time, &size, nil, 0)
@@ -2104,7 +2127,28 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         paint()
     }
 
+    @objc private func openConfig() {
+        let path = ghostty_config_open_path()
+        defer { ghostty_string_free(path) }
+        guard let start = path.ptr, path.len > 0 else { return }
+        let file = URL(fileURLWithPath: String(decoding: UnsafeRawBufferPointer(start: start, count: Int(path.len)), as: UTF8.self))
+        if let probe { return try! file.path.write(toFile: probe + "/opened", atomically: true, encoding: .utf8) }
+        guard let editor = NSWorkspace.shared.urlForApplication(toOpen: .plainText) else { return }
+        NSWorkspace.shared.open([file], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    @objc private func reloadConfig() {
+        relook()
+        refit()
+    }
+
+    @objc private func toggleLinks() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.linksKey), forKey: Self.linksKey) }
     @objc private func toggleBypass() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.askKey), forKey: Self.askKey) }
+    @objc private func toggleClassic() {
+        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.classicKey), forKey: Self.classicKey)
+        Self.fullscreen()
+    }
+    private static func fullscreen() { _ = UserDefaults.standard.bool(forKey: classicKey) ? unsetenv("CLAUDE_CODE_NO_FLICKER") : setenv("CLAUDE_CODE_NO_FLICKER", "1", 1) }
 
     @objc private func toggleSleep() {
         UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Self.wakeKey), forKey: Self.wakeKey)
@@ -2856,7 +2900,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @objc private func forkTab(_ item: NSMenuItem) {
         guard let tab = tabs.first(where: { $0.name == item.representedObject as? String }), let session = tab.session, let front = tab.pid.flatMap(foreground) else { return }
         let base = tab.name.replacingOccurrences(of: "-[0-9]+$", with: "", options: .regularExpression)
-        newTab(beside: tab, named: base, command: Self.claude(Self.flags(Self.arguments(front)) + " --resume " + Self.quoted(session) + " --fork-session"))
+        let resume = Self.resume(tab, session)
+        newTab(beside: tab, named: base, command: Self.claude(Self.flags(Self.arguments(front)) + resume + (resume.isEmpty ? "" : " --fork-session")))
     }
 
     private func resumeItem(_ tab: Tab) -> NSMenuItem {
@@ -2931,7 +2976,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         guard let index = tabs.firstIndex(where: { $0.name == name }), let session = tabs[index].session, let front = tabs[index].pid.flatMap(foreground) else { return }
         let tab = tabs[index], words = Self.arguments(front)
         woken[name] = nil
-        commands[tab.name] = Self.claude(Self.flags(words) + " --resume " + Self.quoted(session), program: Self.quoted(words[0]))
+        commands[tab.name] = Self.claude(Self.flags(words) + Self.resume(tab, session), program: Self.quoted(words[0]))
         let peer = json(NSHomeDirectory() + "/.claude/sessions/\(front).json")?["name"] as? String
         let freed = tab.pid.map { Self.footprint($0) } ?? 0
         tabs[index] = Tab(name: tab.name, group: tab.group, cwd: tab.folder, labels: tab.labels.merging(["sleep": peer ?? "1", "freed": "\(freed)"]) { $1 })
@@ -3665,7 +3710,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         var tab = tabs[index]
         tab.pid = session["pid"].flatMap(Int32.init)
         let kept = Tab(name: name, group: tab.group, cwd: tab.folder, labels: tab.labels)
-        if tab.claude != nil, let session = tab.session, let front = tab.pid.flatMap(foreground) { return (kept, index, Self.claude(Self.flags(Self.arguments(front)) + " --resume " + session), nil) }
+        if tab.claude != nil, let session = tab.session, let front = tab.pid.flatMap(foreground) { return (kept, index, Self.claude(Self.flags(Self.arguments(front)) + Self.resume(tab, session)), nil) }
         if tab.labels["replay"] == nil, let command = commands[name] { return (kept, index, command, nil) }
         guard let history = Self.zmxOutput("history", name, "--vt") else { return (kept, index, nil, nil) }
         return (kept, index, nil, history.lastIndex(of: 10).map { history.prefix(through: $0) })
@@ -3761,27 +3806,51 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                   || tab.name != selected?.name && Self.footprint(front, deep: false) > bloated || Share.stale(front), emptyPrompt(tab.name) else { continue }
             nextResume = Date() + 5
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [unowned self] in resumeUpdatedClaude() }
-            let words = Self.arguments(front), name = tab.name
-            let args = Self.flags(words) + " --resume " + Self.quoted(session)
-            guard front == shell else {
-                Self.onExit(front) { _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", name, Self.quoted(words[0]) + " " + args + "\r"]) }
-                kill(front, SIGTERM)
-                return
-            }
-            tabs[tabs.firstIndex(of: tab)!] = Tab(name: name, group: tab.group, cwd: tab.folder, labels: tab.labels)
-            commands[name] = Self.claude(args, program: Self.quoted(words[0]))
-            save()
-            Self.end(name, shell: shell)
-            let old = surfaces[name]
-            func attach(_ tries: Int) {
-                guard let tab = tabs.first(where: { $0.name == name }), surfaces[name] === old else { return }
-                if tries > 0, FileManager.default.fileExists(atPath: zmxDir + "/" + name) { return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { attach(tries - 1) } }
-                old?.removeFromSuperview()
-                makeSurface(tab).setVisible(false)
-                rebuild()
-            }
-            return attach(30)
+            return restart(tab, session: session, shell: shell, front: front, draft: "")
         }
+    }
+
+    private func restart(_ name: String) -> String? {
+        guard let tab = tabs.first(where: { $0.name == name }) else { return "restart: no tab \(name)" }
+        guard let session = tab.session, let shell = tab.pid, let front = foreground(shell), let state = tab.claude, state != "asleep" else { return "restart: \(name) runs no Claude" }
+        guard state != "working" else { return "restart: \(name) is working; `ct wait \(name) idle` first" }
+        restart(tab, session: session, shell: shell, front: front, draft: Self.prompt(name) ?? "")
+        return nil
+    }
+
+    private func restart(_ tab: Tab, session: String, shell: Int32, front: Int32, draft: String) {
+        let words = Self.arguments(front), name = tab.name
+        let args = Self.flags(words) + Self.resume(tab, session)
+        guard front == shell else {
+            Self.onExit(front) { [unowned self] in
+                _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", name, Self.quoted(words[0]) + " " + args + "\r"])
+                retype(draft, in: name, after: shell)
+            }
+            kill(front, SIGTERM)
+            return
+        }
+        tabs[tabs.firstIndex(of: tab)!] = Tab(name: name, group: tab.group, cwd: tab.folder, labels: tab.labels)
+        commands[name] = Self.claude(args, program: Self.quoted(words[0]))
+        save()
+        Self.end(name, shell: shell)
+        let old = surfaces[name]
+        func attach(_ tries: Int) {
+            guard let tab = tabs.first(where: { $0.name == name }), surfaces[name] === old else { return }
+            if tries > 0, FileManager.default.fileExists(atPath: zmxDir + "/" + name) { return DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { attach(tries - 1) } }
+            old?.removeFromSuperview()
+            makeSurface(tab).setVisible(false)
+            rebuild()
+            retype(draft, in: name, after: shell)
+        }
+        attach(30)
+    }
+
+    private func retype(_ draft: String, in name: String, after shell: Int32, tries: Int = 120) {
+        guard !draft.isEmpty, tries > 0, let tab = tabs.first(where: { $0.name == name }) else { return }
+        guard let pid = tab.pid, pid != shell || tab.claude != nil, Self.prompt(name) == "" else {
+            return DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [unowned self] in retype(draft, in: name, after: shell, tries: tries - 1) }
+        }
+        _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", name, "\u{1B}[200~" + draft + "\u{1B}[201~"])
     }
     private var nextResume = Date.distantPast
     private let bloated: UInt64 = probe == nil ? 400 << 20 : 1
@@ -3981,7 +4050,8 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             view?.cellSize = view?.convertFromBacking(backing) ?? .zero
             refit()
         case GHOSTTY_ACTION_OPEN_URL:
-            open(String(decoding: UnsafeRawBufferPointer(start: action.action.open_url.url, count: Int(action.action.open_url.len)), as: UTF8.self), from: view)
+            let link = String(decoding: UnsafeRawBufferPointer(start: action.action.open_url.url, count: Int(action.action.open_url.len)), as: UTF8.self)
+            DispatchQueue.main.async { self.open(link, from: view) }
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
             let note = action.action.desktop_notification
             let parts = [note.title, note.body].compactMap { $0.map { String(cString: $0) } }.filter { !$0.isEmpty }
@@ -4018,6 +4088,10 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             (action.action.mouse_shape == GHOSTTY_MOUSE_SHAPE_POINTER ? NSCursor.pointingHand : action.action.mouse_shape == GHOSTTY_MOUSE_SHAPE_TEXT ? .iBeam : .arrow).set()
         case GHOSTTY_ACTION_MOUSE_VISIBILITY:
             NSCursor.setHiddenUntilMouseMoves(action.action.mouse_visibility == GHOSTTY_MOUSE_HIDDEN)
+        case GHOSTTY_ACTION_OPEN_CONFIG:
+            openConfig()
+        case GHOSTTY_ACTION_RELOAD_CONFIG:
+            reloadConfig()
         case GHOSTTY_ACTION_QUIT:
             NSApp.terminate(nil)
         case GHOSTTY_ACTION_NEW_TAB:
@@ -4100,6 +4174,13 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             _ = try? Process.run(URL(fileURLWithPath: script), arguments: arguments)
             return
         }
+        let tool = url.isFileURL ? Self.isText(url) ? "ttt" : nil : url.scheme == "http" || url.scheme == "https" ? "terminal-browser" : nil
+        if let tool, let from = tabs.first(where: { surfaces[$0.name] === view }), let found = Self.loginPath.split(separator: ":").map({ $0 + "/" + tool }).first(where: FileManager.default.isExecutableFile) {
+            let open = tabs.first { $0.group == from.group && commands[$0.name]?.contains(found) == true }
+            guard let pane = open.map({ pane(of: $0) }) ?? newPane(beside: pane(of: from), in: from.group, across: true, before: false) else { return NSSound.beep() }
+            let arguments = url.isFileURL ? [url.path + (line.map { ":\($0.row):\($0.column)" } ?? "")] : ["open", url.absoluteString]
+            return newTab(pane: pane, beside: from, named: tool == "ttt" ? "ttt" : "browser", command: ["env", "PATH=" + Self.loginPath, found] + arguments)
+        }
         var xed: [String]?
         if let line, let app = NSWorkspace.shared.urlForApplication(toOpen: url) {
             let opener = Bundle(url: app)?.bundleIdentifier
@@ -4115,6 +4196,21 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
     private static let mimes: [String: NSPasteboard.PasteboardType] = ["text/plain": .string, "text/html": .html, "image/png": .png]
     private static let links = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private static func isText(_ url: URL) -> Bool { (try? FileHandle(forReadingFrom: url).read(upToCount: 8000))?.contains(0) == false }
+    private static let loginPath: String = {
+        let shell = Process(), file = NSTemporaryDirectory() + "claudetty-path-\(getpid())"
+        shell.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
+        shell.arguments = ["-lic", "printf %s \"$PATH\" > \"$CLAUDETTY_PATH_FILE\""]
+        shell.environment = ProcessInfo.processInfo.environment.merging(["CLAUDETTY_PATH_FILE": file]) { $1 }
+        shell.standardInput = FileHandle.nullDevice
+        shell.standardOutput = FileHandle.nullDevice
+        shell.standardError = FileHandle.nullDevice
+        guard (try? shell.run()) != nil else { return "" }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { shell.terminate() }
+        shell.waitUntilExit()
+        defer { try? FileManager.default.removeItem(atPath: file) }
+        return (try? String(contentsOfFile: file, encoding: .utf8)) ?? ""
+    }()
 
     private static func pasteboard(_ location: ghostty_clipboard_e) -> NSPasteboard? {
         guard location == GHOSTTY_CLIPBOARD_STANDARD else { return nil }

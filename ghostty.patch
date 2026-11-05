@@ -12,10 +12,42 @@ index 518af3ff2..b700514d1 100644
  
  // apprt.action.ColorChange
 diff --git a/src/Surface.zig b/src/Surface.zig
-index 8eddc14c8..60b482268 100644
+index 8eddc14c8..b6f9c82e0 100644
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
-@@ -1044,6 +1044,12 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
+@@ -359,10 +359,8 @@ const DerivedConfig = struct {
+             var links: std.ArrayList(DerivedConfig.Link) = .empty;
+             defer links.deinit(alloc);
+             for (config.link.links.items) |link| {
+-                var regex = try link.oniRegex();
+-                errdefer regex.deinit();
+                 try links.append(alloc, .{
+-                    .regex = regex,
++                    .regex = try link.oniRegex(),
+                     .action = link.action,
+                     .highlight = link.highlight,
+                 });
+@@ -370,10 +368,7 @@ const DerivedConfig = struct {
+ 
+             break :links try links.toOwnedSlice(alloc);
+         };
+-        errdefer {
+-            for (links) |*link| link.regex.deinit();
+-            alloc.free(links);
+-        }
++        errdefer alloc.free(links);
+ 
+         return .{
+             .original_font_size = config.@"font-size",
+@@ -430,7 +425,6 @@ const DerivedConfig = struct {
+     }
+ 
+     pub fn deinit(self: *DerivedConfig) void {
+-        for (self.links) |*link| link.regex.deinit();
+         self.arena.deinit();
+     }
+ 
+@@ -1044,6 +1038,12 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
              );
          },
  
@@ -28,7 +60,7 @@ index 8eddc14c8..60b482268 100644
          .set_mouse_shape => |shape| {
              log.debug("changing mouse shape: {}", .{shape});
              _ = try self.rt_app.performAction(
-@@ -1807,6 +1813,15 @@ pub fn updateConfig(
+@@ -1807,6 +1807,15 @@ pub fn updateConfig(
          break :font_size size;
      });
  
@@ -44,7 +76,7 @@ index 8eddc14c8..60b482268 100644
      // We need to store our configs in a heap-allocated pointer so that
      // our messages aren't huge.
      var renderer_message = try rendererpkg.Message.initChangeConfig(self.alloc, config);
-@@ -2738,7 +2753,7 @@ pub fn keyCallback(
+@@ -2738,7 +2747,7 @@ pub fn keyCallback(
          // 1. mouse reporting is off
          // OR
          // 2. mouse reporting is on and we are not reporting shift to the terminal
@@ -53,7 +85,7 @@ index 8eddc14c8..60b482268 100644
              (self.mouse.mods.shift and !self.mouseShiftCapture(false)))
          {
              // Refresh our link state
-@@ -3819,6 +3834,9 @@ pub fn mouseButtonCallback(
+@@ -3819,6 +3828,9 @@ pub fn mouseButtonCallback(
      // bottleneck.
      const shift_capture = self.mouseShiftCapture(true);
  
@@ -63,7 +95,7 @@ index 8eddc14c8..60b482268 100644
      // Shift-click continues the previous mouse state if we have a selection.
      // cursorPosCallback will also do a mouse report so we don't need to do any
      // of the logic below.
-@@ -4627,7 +4645,7 @@ pub fn cursorPosCallback(
+@@ -4627,7 +4639,7 @@ pub fn cursorPosCallback(
      if ((over_link or
          self.mouse.link_point == null or
          (self.mouse.link_point != null and !self.mouse.link_point.?.eql(pos_vp))) and
@@ -136,11 +168,64 @@ index 463ea9bfc..3f39b8071 100644
  
  test "url regex" {
      const testing = std.testing;
+diff --git a/src/input/Link.zig b/src/input/Link.zig
+index 37b45dbd1..fd111edb6 100644
+--- a/src/input/Link.zig
++++ b/src/input/Link.zig
+@@ -8,6 +8,7 @@ const std = @import("std");
+ const Allocator = std.mem.Allocator;
+ const oni = @import("oniguruma");
+ const Mods = @import("key.zig").Mods;
++const global = @import("../global.zig");
+ 
+ /// The regular expression that will be used to match the link. Ownership
+ /// of this memory is up to the caller. The link will never free this memory.
+@@ -51,15 +52,19 @@ pub const Highlight = union(enum) {
+     hover_mods: Mods,
+ };
+ 
+-/// Returns a new oni.Regex that can be used to match the link.
++var compiled: std.StringHashMapUnmanaged(oni.Regex) = .empty;
++var compiled_mutex: std.Io.Mutex = .init;
++
+ pub fn oniRegex(self: *const Link) !oni.Regex {
+-    return try oni.Regex.init(
+-        self.regex,
+-        .{},
+-        oni.Encoding.utf8,
+-        oni.Syntax.default,
+-        null,
+-    );
++    compiled_mutex.lockUncancelable(global.io());
++    defer compiled_mutex.unlock(global.io());
++    if (compiled.get(self.regex)) |regex| return regex;
++    const pattern = try std.heap.c_allocator.dupe(u8, self.regex);
++    errdefer std.heap.c_allocator.free(pattern);
++    var regex = try oni.Regex.init(pattern, .{}, oni.Encoding.utf8, oni.Syntax.default, null);
++    errdefer regex.deinit();
++    try compiled.put(std.heap.c_allocator, pattern, regex);
++    return regex;
+ }
+ 
+ /// Deep clone the link.
+diff --git a/src/main_ghostty.zig b/src/main_ghostty.zig
+index f4fa74133..d897548a2 100644
+--- a/src/main_ghostty.zig
++++ b/src/main_ghostty.zig
+@@ -212,6 +212,8 @@ pub const std_options: std.Options = .{
+ 
+     .logFn = logFn,
+ 
++    .signal_stack_size = null,
++
+     // If are building for a non-MacOS Darwin target (e.g., iOS), we need to
+     // disable stack tracing for the time being. This is due to the fact that
+     // Zig switched to using _dyld_get_image_header_containing_address and some
 diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
-index 9247454db..af9288293 100644
+index 9247454db..86c618497 100644
 --- a/src/renderer/Metal.zig
 +++ b/src/renderer/Metal.zig
-@@ -33,8 +33,7 @@ pub const custom_shader_target: shadertoy.Target = .msl;
+@@ -33,10 +33,13 @@ pub const custom_shader_target: shadertoy.Target = .msl;
  // The fragCoord for Metal shaders is +Y = down.
  pub const custom_shader_y_is_down = true;
  
@@ -149,8 +234,45 @@ index 9247454db..af9288293 100644
 +pub const swap_chain_count = 2;
  
  const log = std.log.scoped(.metal);
++const global = @import("../global.zig");
++
++var shared: ?struct { device: objc.Object, queue: objc.Object } = null;
++var shared_mutex: std.Io.Mutex = .init;
  
-@@ -170,6 +169,7 @@ pub fn loopEnter(self: *Metal) void {
+ layer: IOSurfaceLayer,
+ 
+@@ -70,10 +73,17 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) !Metal {
+     _ = alloc;
+ 
+     // Choose our MTLDevice and create a MTLCommandQueue for that device.
+-    const device = try chooseDevice();
+-    errdefer device.release();
+-    const queue = device.msgSend(objc.Object, objc.sel("newCommandQueue"), .{});
+-    errdefer queue.release();
++    shared_mutex.lockUncancelable(global.io());
++    if (shared == null) {
++        const chosen = chooseDevice() catch |err| {
++            shared_mutex.unlock(global.io());
++            return err;
++        };
++        shared = .{ .device = chosen, .queue = chosen.msgSend(objc.Object, objc.sel("newCommandQueue"), .{}) };
++    }
++    const device = shared.?.device;
++    const queue = shared.?.queue;
++    shared_mutex.unlock(global.io());
+ 
+     // Grab metadata about the device.
+     const default_storage_mode: mtl.MTLResourceOptions.StorageMode = switch (comptime builtin.os.tag) {
+@@ -156,8 +166,6 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) !Metal {
+ }
+ 
+ pub fn deinit(self: *Metal) void {
+-    self.queue.release();
+-    self.device.release();
+     self.layer.release();
+ }
+ 
+@@ -170,6 +178,7 @@ pub fn loopEnter(self: *Metal) void {
  }
  
  fn displayCallback(renderer: *Renderer) align(8) void {
@@ -159,10 +281,68 @@ index 9247454db..af9288293 100644
          log.warn("Error drawing frame in display callback, err={}", .{err});
      };
 diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
-index f66fd3842..d6e4b31d2 100644
+index f66fd3842..ce53b73c9 100644
 --- a/src/renderer/Thread.zig
 +++ b/src/renderer/Thread.zig
-@@ -674,7 +674,7 @@ fn cursorTimerCallback(
+@@ -67,6 +67,10 @@ cursor_c_cancel: xev.Completion = .{},
+ /// Incremental scrollback compression scheduling.
+ compression: Compression = undefined,
+ 
++trim_h: xev.Timer,
++trim_c: xev.Completion = .{},
++trim_c_cancel: xev.Completion = .{},
++
+ /// The surface we're rendering to.
+ surface: *apprt.Surface,
+ 
+@@ -149,6 +153,9 @@ pub fn init(
+     var cursor_timer = try xev.Timer.init();
+     errdefer cursor_timer.deinit();
+ 
++    var trim_h = try xev.Timer.init();
++    errdefer trim_h.deinit();
++
+     // The mailbox for messaging this thread
+     var mailbox = try Mailbox.create(alloc);
+     errdefer mailbox.destroy(alloc);
+@@ -162,6 +169,7 @@ pub fn init(
+         .render_h = render_h,
+         .draw_now = draw_now,
+         .cursor_h = cursor_timer,
++        .trim_h = trim_h,
+         .surface = surface,
+         .renderer = renderer_impl,
+         .state = state,
+@@ -186,6 +194,7 @@ pub fn deinit(self: *Thread) void {
+     self.render_h.deinit();
+     self.draw_now.deinit();
+     self.cursor_h.deinit();
++    self.trim_h.deinit();
+     if (comptime terminalpkg.compression_enabled)
+         self.compression.deinit();
+     self.loop.deinit();
+@@ -582,6 +591,20 @@ fn renderCallback(
+     // Schedule the next animation wake, if the renderer needs one.
+     t.armAnimationTimer();
+ 
++    if (comptime !apprt.must_draw_from_app_thread) t.trim_h.reset(&t.loop, &t.trim_c, &t.trim_c_cancel, 1000, Thread, t, trimCallback);
++
++    return .disarm;
++}
++
++fn trimCallback(
++    self_: ?*Thread,
++    _: *xev.Loop,
++    _: *xev.Completion,
++    r: xev.Timer.RunError!void,
++) xev.CallbackAction {
++    _ = r catch return .disarm;
++    const t = self_ orelse return .disarm;
++    if (t.flags.visible) t.renderer.trimSwapChain();
+     return .disarm;
+ }
+ 
+@@ -674,7 +697,7 @@ fn cursorTimerCallback(
      };
  
      t.flags.cursor_blink_visible = !t.flags.cursor_blink_visible;
@@ -171,7 +351,7 @@ index f66fd3842..d6e4b31d2 100644
  
      t.cursor_h.run(
          &t.loop,
-@@ -784,6 +784,7 @@ const Compression = struct {
+@@ -784,6 +807,7 @@ const Compression = struct {
              const activity = thread.state.terminal.compressionActivity();
              if (self.activity == activity) return;
              self.activity = activity;
@@ -179,7 +359,7 @@ index f66fd3842..d6e4b31d2 100644
          } else if (self.completion.state() == .active) {
              // Contention doesn't prove that compression-relevant activity
              // changed. Keep an existing deadline so frequent inspector frames
-@@ -838,14 +839,10 @@ const Compression = struct {
+@@ -838,14 +862,10 @@ const Compression = struct {
          if (!thread.config.scrollback_compression) return null;
  
          const state = thread.state;
@@ -196,8 +376,26 @@ index f66fd3842..d6e4b31d2 100644
  
          return switch (state.terminal.compress(.incremental)) {
              .pending => step_interval,
+diff --git a/src/renderer/cell.zig b/src/renderer/cell.zig
+index 8753d1ad9..3c908784a 100644
+--- a/src/renderer/cell.zig
++++ b/src/renderer/cell.zig
+@@ -97,12 +97,7 @@ pub const Contents = struct {
+             alloc.free(fg_rows);
+         }
+ 
+-        // Foreground rows hold glyphs plus underlines, overlines, and
+-        // strikethroughs. Three entries per column cover the common cases
+-        // without reserving space for every decoration combination. We can't
+-        // assume this capacity because combining glyphs and font substitutions
+-        // can produce arbitrarily many glyphs in one column.
+-        const fg_row_capacity = @as(usize, size.columns) * 3;
++        const fg_row_capacity: usize = size.columns;
+ 
+         // The cursor lists need just one cell. The rest get the full capacity.
+         fg_rows[0] = try .initCapacity(alloc, 1);
 diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
-index 2a81f42b4..6554eb6cc 100644
+index 2a81f42b4..c33802c18 100644
 --- a/src/renderer/generic.zig
 +++ b/src/renderer/generic.zig
 @@ -120,6 +120,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
@@ -219,7 +417,15 @@ index 2a81f42b4..6554eb6cc 100644
          /// Tracks the last bottom-right pin of the screen to detect new output.
          /// When the final line changes (node or y differs), new content was added.
          /// Used for scroll-to-bottom on output feature.
-@@ -311,6 +316,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -274,6 +279,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             frames: [buf_count]FrameState,
+             /// Index of the most recently used frame state struct.
+             frame_index: std.math.IntFittingRange(0, buf_count) = 0,
++            presented: std.math.IntFittingRange(0, buf_count) = 0,
+             /// Semaphore that we wait on to make sure we have an available
+             /// frame state struct so we can start working on a new frame.
+             frame_sema: std.Io.Semaphore = .{ .permits = buf_count },
+@@ -311,6 +317,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              pub fn releaseFrame(self: *SwapChain) void {
                  self.frame_sema.post(global.io());
              }
@@ -231,7 +437,7 @@ index 2a81f42b4..6554eb6cc 100644
          };
  
          /// State we need duplicated for every frame. Any state that could be
-@@ -335,6 +345,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -335,6 +346,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              target: Target,
              /// See property of same name on Renderer for explanation.
              target_config_modified: usize = 0,
@@ -239,7 +445,26 @@ index 2a81f42b4..6554eb6cc 100644
  
              /// Buffer with the vertex data for our background image.
              ///
-@@ -1541,14 +1552,22 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -1150,6 +1162,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             }
+         }
+ 
++        pub fn trimSwapChain(self: *Self) void {
++            self.draw_mutex.lockUncancelable(global.io());
++            defer self.draw_mutex.unlock(global.io());
++            const sc = if (self.swap_chain) |*sc| sc else return;
++            sc.waitIdle();
++            for (&sc.frames, 0..) |*frame, i| {
++                if (i == sc.presented or frame.target.width <= 1) continue;
++                frame.resize(self.api, 1, 1) catch continue;
++                frame.content_hash = 0;
++            }
++        }
++
+         /// Create or update the display link and match it to the current
+         /// surface state.
+         fn syncDisplayLink(
+@@ -1541,14 +1565,22 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                  self.draw_mutex.lockUncancelable(global.io());
                  defer self.draw_mutex.unlock(global.io());
  
@@ -267,7 +492,7 @@ index 2a81f42b4..6554eb6cc 100644
                      &critical.links,
                  ) catch |err| {
                      // This means we weren't able to allocate our buffer
-@@ -1603,6 +1622,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -1603,6 +1635,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              self.syncDisplayLink(null, null);
          }
  
@@ -286,7 +511,7 @@ index 2a81f42b4..6554eb6cc 100644
          /// Draw the frame to the screen.
          ///
          /// If `sync` is true, this will synchronously block until
-@@ -1684,11 +1715,23 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -1684,11 +1728,25 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                  self.syncDisplayLink(null, null);
                  return;
              }
@@ -298,6 +523,7 @@ index 2a81f42b4..6554eb6cc 100644
 +                swap_chain.waitIdle();
 +                self.cells_rebuilt = false;
 +                try self.api.present(swap_chain.frames[i].target, false);
++                swap_chain.presented = @intCast(i);
 +                self.syncDisplayLink(null, null);
 +                return;
 +            };
@@ -306,11 +532,12 @@ index 2a81f42b4..6554eb6cc 100644
              // Wait for a frame to be available.
              const frame = swap_chain.nextFrame();
              errdefer swap_chain.releaseFrame();
++            swap_chain.presented = swap_chain.frame_index;
 +            frame.content_hash = content_hash;
              // log.debug("drawing frame index={}", .{swap_chain.frame_index});
  
              // If we need to reinitialize our shaders, do so.
-@@ -2629,6 +2672,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -2629,6 +2687,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                  };
              }
  
@@ -319,7 +546,7 @@ index 2a81f42b4..6554eb6cc 100644
              // Setup our cursor rendering information.
              cursor: {
                  // Clear our cursor by default.
-@@ -2794,6 +2839,25 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -2794,6 +2854,25 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              // });
          }
  
@@ -345,7 +572,7 @@ index 2a81f42b4..6554eb6cc 100644
          fn rebuildRow(
              self: *Self,
              y: terminal.size.CellCountInt,
-@@ -2842,6 +2906,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+@@ -2842,6 +2921,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                  },
              }
  
@@ -355,6 +582,41 @@ index 2a81f42b4..6554eb6cc 100644
              // Iterator of runs for shaping.
              var run_iter_opts: font.shape.RunOptions = .{
                  .grid = self.font_grid,
+diff --git a/src/renderer/link.zig b/src/renderer/link.zig
+index dfc6fe671..396f6f1e2 100644
+--- a/src/renderer/link.zig
++++ b/src/renderer/link.zig
+@@ -18,10 +18,6 @@ pub const Link = struct {
+     /// The situations in which the link should be highlighted.
+     highlight: inputpkg.Link.Highlight,
+ 
+-    pub fn deinit(self: *Link) void {
+-        self.regex.deinit();
+-    }
+-
+     /// Returns true if this link's highlight condition matches the given mouse state.
+     fn active(
+         self: *const Link,
+@@ -52,10 +48,8 @@ pub const Set = struct {
+         defer links.deinit(alloc);
+ 
+         for (config) |link| {
+-            var regex = try link.oniRegex();
+-            errdefer regex.deinit();
+             try links.append(alloc, .{
+-                .regex = regex,
++                .regex = try link.oniRegex(),
+                 .highlight = link.highlight,
+             });
+         }
+@@ -64,7 +58,6 @@ pub const Set = struct {
+     }
+ 
+     pub fn deinit(self: *Set, alloc: Allocator) void {
+-        for (self.links) |*link| link.deinit();
+         alloc.free(self.links);
+     }
+ 
 diff --git a/src/termio/stream_handler.zig b/src/termio/stream_handler.zig
 index 27e06dcb7..4b5fe22ff 100644
 --- a/src/termio/stream_handler.zig
