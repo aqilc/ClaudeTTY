@@ -12,7 +12,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--ground); color: var(--ink); font: 17px/1.55 -apple-system, BlinkMacSystemFont, sans-serif; }
   a { color: inherit; }
-  img { max-width: 100%; height: auto; display: block; }
+  img, video { max-width: 100%; height: auto; display: block; }
   canvas { image-rendering: pixelated; display: block; }
 
   /* the sidebar, drawn like ClaudeTTY's own: one row per section, the one you're reading selected and awake */
@@ -37,6 +37,9 @@
   .download a:active { transform: scale(.97); }
   .download small { color: var(--muted); font-size: 14px; }
   .hero { display: block; margin: 0 -24px; }
+  /* the first frame until the video plays, or for good where autoplay is refused (iOS Low Power Mode) */
+  .hero video { background: url(media/window-light.webp) 50% / cover; }
+  @media (prefers-color-scheme: dark) { .hero video { background-image: url(media/window-dark.webp); } }
 
   section { padding-top: 96px; }
   h2 { margin: 0 0 24px; font: 600 13px var(--mono); color: var(--muted); }
@@ -77,7 +80,7 @@
     h1 + p { font-size: 17px; }
     /* the window at phone width is 3 px text: crop to its sidebar and the start of the chat, edge to edge */
     .hero, .clip img { margin: 0 -20px; }
-    .hero img { width: 100%; aspect-ratio: 39 / 44; object-fit: cover; object-position: 8% 45%; }
+    .hero video { width: 100%; aspect-ratio: 39 / 44; object-fit: cover; object-position: 8% 45%; background-position: 8% 45%; }
     .clip { grid-template-columns: 1fr; gap: 14px; }
     .clip img { max-width: none; width: calc(100% + 40px); aspect-ratio: 1; object-fit: cover; object-position: 2% 4%; border-radius: 0; }
     /* the 4 x 2 dots grid splits into two 2 x 2 halves so the labels stay readable */
@@ -137,7 +140,7 @@
   .morph .m { width: 64px; height: 64px; }
   .morph span { font-size: 22px; font-weight: 600; }
   .player { display: grid; grid-template-columns: 250px 1fr; gap: 32px; margin: 40px 0; align-items: start; }
-  .player img { border-radius: 10px; }
+  .player video { border-radius: 10px; }
   .chapters { display: grid; gap: 4px; }
   .chapters button { position: relative; display: grid; grid-template-rows: auto 0fr; padding: 10px 14px 12px; margin: 0 -14px; border: 0; border-radius: 10px; background: none; color: var(--muted); font: inherit; text-align: left; cursor: pointer; overflow: hidden; transition: grid-template-rows 250ms cubic-bezier(0.23, 1, 0.32, 1), background-color 200ms ease, color 200ms ease; }
   .chapters button:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
@@ -154,8 +157,8 @@
     .morph { padding: 4px 0; }
     .morph .m { width: 52px; height: 52px; }
     .player { grid-template-columns: 1fr; gap: 14px; }
-    .player img { order: -1; }
-    .player img { margin: 0 -20px; max-width: none; width: calc(100% + 40px); aspect-ratio: 1; object-fit: cover; object-position: 2% 4%; border-radius: 0; }
+    .player video { order: -1; }
+    .player video { margin: 0 -20px; max-width: none; width: calc(100% + 40px); aspect-ratio: 1; object-fit: cover; object-position: 2% 4%; border-radius: 0; }
   }
 
   /* site-5: the sidebar at the app's own proportions, the page as wide as the screen */
@@ -174,11 +177,11 @@
     .band { margin-top: 44px; }
     /* the window cut out of its README backdrop (gif px 63,63 1146 x 719 inside its 1 px border ring, radius 22: its corner arc, measured on the diagonal) */
     .hero { display: block; margin: 0; aspect-ratio: 1146 / 719; overflow: hidden; border-radius: 1.92% / 3.06%; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 24px 70px rgba(0,0,0,.35); }
-    .hero img { width: 111%; max-width: none; margin: -5.5% 0 0 -5.5%; }
+    .hero video { width: 111%; max-width: none; margin: -5.5% 0 0 -5.5%; }
     #top > section { columns: 2; column-gap: 56px; padding-top: 48px; }
     #top > section p { max-width: none; margin: 0; break-inside: avoid; }
     .clip, .player { grid-template-columns: 340px minmax(0, 1fr); gap: 56px; }
-    .player img { max-width: min(100%, 900px); }
+    .player video { max-width: min(100%, 900px); }
     #numbers { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 56px; align-items: start; }
     #numbers .stats b { white-space: nowrap; line-height: 1.2; }
     #numbers > :not(.bars, .stats) { grid-column: 1 / -1; }
@@ -223,7 +226,7 @@
   .card small, .facts small { display: block; margin-top: 10px; font-size: 14px; line-height: 1.5; color: var(--muted); }
   .cards { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 28px; }
   .card.player { grid-column: 1 / -1; margin: 0; }
-  .card.player img { box-shadow: 0 0 0 .5px rgba(0,0,0,.3), 0 14px 40px rgba(0,0,0,.22); }
+  .card.player video { box-shadow: 0 0 0 .5px rgba(0,0,0,.3), 0 14px 40px rgba(0,0,0,.22); }
   .card > button, .stack > button { margin-top: 18px; padding: 8px 14px; border: 0; border-radius: 9px; background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); font: 500 15px -apple-system, sans-serif; cursor: pointer; transition: background-color 200ms ease, transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
   .card > button:hover { background: color-mix(in srgb, var(--ink) 13%, transparent); }
   .card > button:active { transform: scale(.97); }
@@ -288,7 +291,7 @@
     .cards { grid-template-columns: 1fr; gap: 18px; }
     .card { padding: 20px; }
     .card.player { display: grid; }
-    .card.player img { margin: 0; width: 100%; border-radius: 10px; }
+    .card.player video { margin: 0; width: 100%; border-radius: 10px; }
     .duo { padding: 14px; }
     .stats { grid-template-columns: repeat(2, auto); gap: 16px 32px; }
     .vs { gap: 18px; }
@@ -441,10 +444,10 @@
     <small>macOS 26 or later, Apple Silicon.<br>Free, and the source is on <a href="https://github.com/aqilc/ClaudeTTY">GitHub</a>.</small>
   </div>
 
-  <div class="band"><picture class="hero">
-    <source srcset="media/window-dark.gif" media="(prefers-color-scheme: dark)">
-    <img src="media/window-light.gif" width="954" height="657" alt="ClaudeTTY over a sunset, blurring it, with Claude editing a file in one tab">
-  </picture></div>
+  <div class="band"><div class="hero"><video autoplay muted loop playsinline width="954" height="657" role="img" aria-label="ClaudeTTY over a sunset, blurring it, with Claude editing a file in one tab">
+    <source src="media/window-dark.mp4" media="(prefers-color-scheme: dark)">
+    <source src="media/window-light.mp4">
+  </video></div></div>
 
   <section>
     <p><b>Why.</b> I let Claude write the code and only step in now and then. You don't really need file trees or editors for that, so I took them out.</p>
@@ -468,11 +471,11 @@
     </div>
     <div class="card player">
       <div class="chapters">
-        <button class="on" data-src="media/survive.gif" data-ms="7600"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every Claude keeps working.</span><i></i></button>
-        <button data-src="media/sidebar.gif" data-ms="9280"><b>Animations and polish.</b><span>Tabs and groups slide aside as you drag, and the sidebar slides like a native Mac one. Satisfying. <kbd>⌘B</kbd> for less satisfaction but some more practicality.</span><i></i></button>
-        <button data-src="media/mod.gif" data-ms="11550"><b>Change it yourself.</b><span>Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
+        <button class="on" data-src="media/survive.mp4" data-ms="7875"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every Claude keeps working.</span><i></i></button>
+        <button data-src="media/sidebar.mp4" data-ms="9333"><b>Animations and polish.</b><span>Tabs and groups slide aside as you drag, and the sidebar slides like a native Mac one. Satisfying. <kbd>⌘B</kbd> for less satisfaction but some more practicality.</span><i></i></button>
+        <button data-src="media/mod.mp4" data-ms="14892"><b>Change it yourself.</b><span>Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
       </div>
-      <img src="media/survive.gif" width="900" height="596" alt="The app is killed and reopened with every tab still running">
+      <video autoplay muted loop playsinline poster="media/survive.webp" width="1180" height="780" role="img" aria-label="The app is killed and reopened with every tab still running"></video>
     </div>
   </div>
 </section>
@@ -757,18 +760,27 @@ fetch('media/marks.json').then(r => r.json()).then(tracks => {
 });
 
 // The clips share one window: a chapter plays its clip once, then the next; a click picks one.
-const chapters = [...document.querySelectorAll('.chapters button')], screen = document.querySelector('.player img');
-let playing;
-const clips = {};   // each clip downloads once; a fresh blob URL restarts it from its first frame
+const chapters = [...document.querySelectorAll('.chapters button')];
+let screen = document.querySelector('.player video'), playing;
+const clips = {};   // a video per clip, fetched once; it takes the screen's place only once it plays, so no poster or blank frame shows between clips
 const play = i => {
   const ch = chapters[i];
   chapters.forEach(c => { c.classList.toggle('on', c === ch); c.querySelector('i').getAnimations().forEach(a => a.cancel()); });
-  (clips[ch.dataset.src] ??= fetch(ch.dataset.src).then(r => r.blob())).then(blob => {
-    if (!ch.classList.contains('on')) return;
-    URL.revokeObjectURL(screen.src);
-    screen.src = URL.createObjectURL(blob);
+  (clips[ch.dataset.src] ??= fetch(ch.dataset.src).then(r => r.blob()).then(blob => {
+    const video = screen.cloneNode();
+    video.removeAttribute('poster');
+    video.src = URL.createObjectURL(blob);
+    return video;
+  })).then(async video => {
+    video.currentTime = 0;
+    video.ariaLabel = ch.querySelector('b').textContent;
+    await video.play();
+    if (!ch.classList.contains('on')) return video.pause();
+    if (video === screen) return;
+    screen.pause();
+    screen.replaceWith(video);
+    screen = video;
   });
-  screen.alt = ch.querySelector('b').textContent;
   if (still.matches) return;
   playing = ch.querySelector('i').animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { duration: +ch.dataset.ms, easing: 'linear' });
   playing.onfinish = () => play((i + 1) % chapters.length);
@@ -798,6 +810,7 @@ const dark = matchMedia('(prefers-color-scheme: dark)'), napSteps = [
   ['cold', '<b>docs:</b> asleep, cache cold', 'Wake it'],
 ];
 let napAt = 0;
+dark.addEventListener('change', () => document.querySelector('.hero video').load());   // the hero's source follows the appearance, as its picture did
 napButton.addEventListener('click', () => {
   napAt = (napAt + 1) % napSteps.length;
   const [state, line, label] = napSteps[napAt];
