@@ -53,7 +53,7 @@ Smaller Things I Like
 ---------------------
 
 - Tabs sleep like Chrome's after 20 idle minutes, which saves about 500 MB each, and wake into the same session. Right-click the sidebar for the total.
-- A cold cache turns a sleeping Claude icy cyan. View > Keep Asleep Tabs Warm prevents it.
+- A cold cache turns a sleeping Claude icy cyan. ClaudeTTY > Keep Asleep Tabs Warm prevents it.
 - Right-click a tab for its model, effort and context.
 - The sidebar names the background command a Claude is waiting on, and its Clawd goes fishing.
 - Click "3 subs" under a group to watch a subagent work live.
@@ -79,7 +79,7 @@ Compared to cmux and Others
 | Launch to first window | 307 ms | 701 ms | not timed | 889 ms | 829 ms | 1,226 ms | 302 ms |
 | App size | 20 MB | 454 MB | 86 MB | 1.5 GB | 872 MB | 531 MB | 62 MB |
 
-<sub>All on my M4 Pro (48 GB) with macOS 27.0 and one window with one tab. Launch is the median of 5, memory is Activity Monitor's footprint 20 s after launch (ClaudeTTY's includes the zmx process holding the tab) and CPU is over the 30 s after that. cmux 0.65.2, Superset 1.39.0, Warp 0.2026.10.14 and Wave 0.14.5 on fresh profiles, Ghostty 1.3.1. herdr 0.9.5 runs inside your terminal, so its numbers are herdr plus Ghostty (herdr alone is 25 MB, 0.2% and 24 MB). Closing the terminal keeps its tabs running, but a server restart ends them (<a href="https://herdr.dev/docs/session-state/">herdr docs</a>). Without tmux, cmux reopens your layout and restarts Claude into its last conversation, but whatever was running is gone (<a href="https://github.com/manaflow-ai/cmux">cmux README</a>).</sub>
+<sub>All on my M4 Pro (48 GB) with macOS 27.0 and one window with one tab. Launch is the median of 5, memory is Activity Monitor's footprint 20 s after launch (ClaudeTTY's includes the zmx process holding the tab) and CPU is over the 30 s after that. cmux 0.65.2 ran on my own setup with about 4 months of Claude history, since plenty of people have used it that long or longer. Superset 1.39.0, Warp 0.2026.10.14 and Wave 0.14.5 ran on fresh profiles, and Ghostty is 1.3.1. herdr 0.9.5 runs inside your terminal, so its numbers are herdr plus Ghostty (herdr alone is 25 MB, 0.2% and 24 MB). Closing the terminal keeps its tabs running, but a server restart ends them (<a href="https://herdr.dev/docs/session-state/">herdr docs</a>). Without tmux, cmux reopens your layout and restarts Claude into its last conversation, but whatever was running is gone (<a href="https://github.com/manaflow-ai/cmux">cmux README</a>).</sub>
 
 That 68 MB is just the app though. Each Claude Code takes about 500 MB on its own and keeps using a bit of CPU while idle, so the tabs that fall asleep end up saving way more than the app does.
 
@@ -115,6 +115,45 @@ You need Xcode and Zig 0.16 (`brew install zig@0.16`).
 
 install.sh signs with your Apple Development identity if you have one and otherwise offers to make a local one, so macOS remembers the app's permissions between builds. It also restarts the app, everything running as it was.
 </details>
+
+All Features
+------------
+
+<table>
+<tbody><tr><th colspan="4" align="left">Tabs and panes</th></tr>
+<tr><td>Command Palette</td><td align="right" nowrap><kbd>⌘</kbd> <kbd>P</kbd></td><td>Reopen Closed Tab</td><td align="right" nowrap><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>T</kbd></td></tr>
+<tr><td>Split Right</td><td align="right" nowrap><kbd>⌘</kbd> <kbd>D</kbd></td><td>New Claude Tab</td><td align="right" nowrap><kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>T</kbd></td></tr>
+<tr><td>Split Down</td><td align="right" nowrap><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>D</kbd></td><td>Tab 1 to 8 in a Pane</td><td align="right" nowrap><kbd>⌃</kbd> <kbd>1</kbd>–<kbd>8</kbd></td></tr>
+<tr><td>Pane's Last Tab</td><td align="right" nowrap><kbd>⌃</kbd> <kbd>9</kbd></td><td>Next Tab That Needs You</td><td align="right" nowrap><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>U</kbd></td></tr>
+<tr><td>Zoom Pane</td><td align="right" nowrap><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>↩</kbd></td><td>Move Tab to Pane</td><td align="right" nowrap>right-click or drag</td></tr>
+<tr><td colspan="2"></td><td>Mute and Read-only Tabs</td><td align="right" nowrap>right-click</td></tr>
+</tbody>
+<tbody><tr><th colspan="4" align="left">Groups and folders</th></tr>
+<tr><td>New Group</td><td align="right" nowrap><kbd>⌘</kbd> <kbd>N</kbd></td><td>Select Several Groups</td><td align="right" nowrap><kbd>⌘</kbd>-click, <kbd>⇧</kbd>-click</td></tr>
+<tr><td>Close Group</td><td align="right" nowrap><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>W</kbd></td><td>Rename Group</td><td align="right" nowrap><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>R</kbd></td></tr>
+<tr><td>Group 1 to 8</td><td align="right" nowrap><kbd>⌘</kbd> <kbd>1</kbd>–<kbd>8</kbd></td><td>Pin, Color and Sort Groups</td><td align="right" nowrap>right-click</td></tr>
+<tr><td>Last Group</td><td align="right" nowrap><kbd>⌘</kbd> <kbd>9</kbd></td><td>Close Other Groups</td><td align="right" nowrap>right-click</td></tr>
+<tr><td colspan="2"></td><td>Tab Count and Memory Saved</td><td align="right" nowrap>right-click sidebar</td></tr>
+</tbody>
+<tbody><tr><th colspan="4" align="left">Claude</th></tr>
+<tr><td>Show Context Size</td><td align="right" nowrap>View</td><td>Tab Icons: Dots or Clawd</td><td align="right" nowrap>View</td></tr>
+<tr><td>Sleep Tab</td><td align="right" nowrap>right-click</td><td>Switch Model, Effort or Context</td><td align="right" nowrap>right-click</td></tr>
+<tr><td>Keep Asleep Tabs Warm</td><td align="right" nowrap>app menu</td><td>Schedule Message</td><td align="right" nowrap>right-click</td></tr>
+<tr><td>Sleep Idle Tabs</td><td align="right" nowrap>app menu</td><td>Bypass Permissions</td><td align="right" nowrap>app menu</td></tr>
+<tr><td>Keep Awake</td><td align="right" nowrap>right-click</td><td>Fork Tab</td><td align="right" nowrap>right-click</td></tr>
+<tr><td>Share MCP Servers</td><td align="right" nowrap>app menu</td><td>Resume Session</td><td align="right" nowrap>right-click or <kbd>⌘</kbd> <kbd>P</kbd></td></tr>
+<tr><td><code>ct://</code> Links</td><td align="right" nowrap>app menu</td><td>Notification sound customization</td><td align="right" nowrap>app menu</td></tr>
+</tbody>
+<tbody><tr><th colspan="4" align="left">Terminal</th></tr>
+<tr><td>Next Prompt</td><td align="right" nowrap><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>↓</kbd></td><td>Previous Prompt</td><td align="right" nowrap><kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>↑</kbd></td></tr>
+<tr><td colspan="2">Download/Build Progress Display</td><td>Secure Keyboard Entry</td><td align="right" nowrap>app menu</td></tr>
+</tbody>
+<tbody><tr><th colspan="4" align="left">Looks and the app</th></tr>
+<tr><td>Hide Sidebar</td><td align="right" nowrap><kbd>⌘</kbd> <kbd>B</kbd></td><td>Blur, Opacity, Padding and Cursor</td><td align="right" nowrap>View</td></tr>
+<tr><td>Pane Buttons</td><td align="right" nowrap>View</td><td>Character Perfect Sizing</td><td align="right" nowrap>View</td></tr>
+<tr><td colspan="2">Menubar Indicator</td><td>Show and Hide Hotkey, like iTerm's</td><td align="right" nowrap>app menu</td></tr>
+</tbody>
+</table>
 
 Limitations
 -----------
