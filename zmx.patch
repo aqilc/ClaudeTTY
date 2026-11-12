@@ -1,0 +1,118 @@
+zmx #294: Daemon.deinit freed socket_path, which the caller allocated before the fork with another allocator (Daemon.init: "Caller is responsible for freeing all variables passed into the init fn"); every session exit aborted in libmalloc.
+The daemon compresses its scrollback once output rests a second, as the app's renderer does (Terminal.compress): zmx never called it, so a long-scrollback tab's daemon kept every page resident.
+A command naming a session a zmx 0.8 daemon serves runs as the bundled zmx-0.8 (forwardOld): 0.8 frames its header as a packed { tag, len: u32 }, so it reads our protocol version byte as a payload length and never answers. An app built for 0.8 that an update swapped to this binary called `zmx history` on its main thread and froze (1.2.3 to 1.2.4).
+diff --git a/src/loop.zig b/src/loop.zig
+index f5d6708..53856e6 100644
+--- a/src/loop.zig
++++ b/src/loop.zig
+@@ -262,6 +262,9 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+ 
+     var had_terminal_client = daemon.hasTerminalClient();
+ 
++    var compress_due = false;
++    var compressing = false;
++
+     daemon_loop: while (daemon.running) {
+         // If the program asked for focus reports (DECSET 1004), send focus-out
+         // when the last attached client leaves and focus-in when one returns,
+@@ -304,7 +307,11 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+             });
+         }
+ 
+-        _ = try lib_posix.poll(poll_fds.items, -1);
++        const timeout: i32 = if (!compress_due) -1 else if (compressing) 0 else 1000;
++        if (try lib_posix.poll(poll_fds.items, timeout) == 0) {
++            compressing = term.compress(.incremental) == .pending;
++            compress_due = compressing;
++        }
+ 
+         if (poll_fds.items[2].revents & lib_posix.POLL.IN != 0) {
+             signal.drainSignalPipe() catch {};
+@@ -367,6 +374,8 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+                 } else {
+                     // Feed PTY output to terminal emulator for state tracking
+                     vt_stream.nextSlice(buf[0..n]);
++                    compress_due = true;
++                    compressing = false;
+                     daemon.setPwd(&term);
+                     daemon.has_pty_output = true;
+ 
+@@ -652,7 +661,6 @@ pub const Daemon = struct {
+         }
+         self.labels.deinit(gpa);
+         self.pty_write_buf.deinit(gpa);
+-        gpa.free(self.socket_path);
+     }
+ 
+     pub fn shutdown(self: *Daemon, gpa: std.mem.Allocator) void {
+@@ -1506,7 +1514,7 @@ test "handleEnvGet returns leader client's environment variables including unset
+         .cfg = &cfg,
+         .clients = .empty,
+         .session_name = "test",
+-        .socket_path = try alloc.dupe(u8, ""),
++        .socket_path = "",
+         .running = true,
+         .pid = 0,
+         .created_at = 0,
+--- a/src/ipc.zig
++++ b/src/ipc.zig
+@@ -252,6 +251,18 @@
+         error.ConnectionRefused => return error.ConnectionRefused,
+         else => return error.Unexpected,
+     };
++}
++
++pub fn oldProtocol(socket_path: []const u8) bool {
++    const fd = connectSession(socket_path) catch return false;
++    defer lib_posix.close(fd);
++    send(fd, .Info, "") catch return false;
++    send(fd, .LabelGet, "") catch {};
++    var poll_fds = [_]lib_posix.pollfd{.{ .fd = fd, .events = lib_posix.POLL.IN, .revents = 0 }};
++    if ((lib_posix.poll(&poll_fds, 1000) catch return false) == 0) return false;
++    var reply: [@sizeOf(Header)]u8 = undefined;
++    const n = lib_posix.read(fd, &reply) catch return false;
++    return n >= 2 and reply[1] != PROTOCOL_VERSION;
+ }
+ 
+ const SessionProbeError = error{
+--- a/src/main.zig
++++ b/src/main.zig
+@@ -31,6 +28,30 @@
+     w.interface.flush() catch {};
+     std.process.exit(1);
+ }
++
++fn forwardOld(gpa: std.mem.Allocator, io: std.Io, cfg: *Cfg, args: std.process.Args) !void {
++    const argv = try args.toSlice(gpa);
++    defer gpa.free(argv);
++    var i: usize = 2;
++    while (i < argv.len and std.mem.startsWith(u8, argv[i], "-")) : (i += 1) {
++        if (std.mem.eql(u8, argv[i], "--labels")) i += 1;
++    }
++    if (i >= argv.len) return;
++    const sesh = socket.getSeshName(gpa, argv[i]) catch return;
++    defer gpa.free(sesh);
++    const socket_path = socket.getSocketPath(gpa, cfg.socket_dir, sesh) catch return;
++    defer gpa.free(socket_path);
++    if (!ipc.oldProtocol(socket_path)) return;
++    var dir: [std.fs.max_path_bytes]u8 = undefined;
++    const n = std.process.executableDirPath(io, &dir) catch |err| printError(io, "session \"{s}\" runs zmx 0.8 ({s})", .{ argv[i], @errorName(err) });
++    const sibling = try std.fs.path.join(gpa, &.{ dir[0..n], "zmx-0.8" });
++    const forwarded = try gpa.alloc([]const u8, argv.len);
++    for (forwarded, argv) |*to, from| to.* = from;
++    forwarded[0] = sibling;
++    const err = std.process.replace(io, .{ .argv = forwarded });
++    printError(io, "session \"{s}\" runs zmx 0.8 and {s} can't run ({s})", .{ argv[i], sibling, @errorName(err) });
++}
++
+ pub fn main(init: std.process.Init) !void {
+     mainImpl(init) catch |err| switch (err) {
+         error.Sighup => signal.reraise(.HUP),
+@@ -56,6 +77,7 @@
+ 
+     var cfg = try Cfg.init(gpa, io);
+     defer cfg.deinit(gpa);
++    try forwardOld(gpa, io, &cfg, init.minimal.args);
+ 
+     const log_path = try std.fs.path.join(gpa, &.{ cfg.log_dir, "zmx.log" });
+     defer gpa.free(log_path);

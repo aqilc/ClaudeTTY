@@ -1,1 +1,1 @@
-{ "name": "claudetty", "description": "Shows each Claude session's state (working, waiting, idle) in the ClaudeTTY sidebar." }
+{ "name": "claudetty", "version": "1.2.4", "author": { "name": "aqilc" }, "license": "CC-BY-NC-SA-4.0", "description": "Shows each Claude session's state (working, waiting, idle) in the ClaudeTTY sidebar." }

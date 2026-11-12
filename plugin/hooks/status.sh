@@ -7,7 +7,7 @@ if [ "$1" = send ]; then
   [ -n "$tab" ] || exit 0
   group=${tab%%"	"*} tab=${tab#*"	"}
   ct=$(command -v ct) || ct="$HOME/.local/bin/ct"
-  "$ct" "$group" "$tab" >/dev/null 2>&1
+  "$ct" "$group" "$tab" >&2
   i=0
   while [ $i -lt 240 ]; do
     for f in $(grep -lF "\"name\":\"$to\"" "$HOME"/.claude/sessions/*.json 2>/dev/null); do
@@ -15,12 +15,12 @@ if [ "$1" = send ]; then
     done
     sleep 0.5; i=$((i+1))
   done
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' "$(jq -n --arg r "$to was asleep in ClaudeTTY tab $tab and hasn't woken within 2 min. Retry the SendMessage." '$r')"
+  jq -nc --arg r "$to was asleep in ClaudeTTY tab $tab and hasn't woken within 2 min. Retry the SendMessage." '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
   exit 0
 fi
 [ -n "$ZMX_SESSION" ] || exit 0
 input=$(cat)
-[ "$1" = working ] && printf %s "$input" | jq -e 'has("agent_id")' >/dev/null 2>&1 && exit 0
+[ "$1" = working ] && printf %s "$input" | jq -e 'has("agent_id")' >/dev/null 2>/dev/null && exit 0
 case "$1" in idle|agent|compact*|"") event=$(printf %s "$input" | jq -r .hook_event_name);; esac
 [ -d "$dir" ] || mkdir -p "$dir"
 status=; { read -r status < "$dir/$ZMX_SESSION"; } 2>/dev/null
@@ -28,9 +28,10 @@ case "$1" in
   compacting) printf %s "$status" > "$dir/.$ZMX_SESSION.compact"; set -- working;;
   compacted) before=; { read -r before < "$dir/.$ZMX_SESSION.compact"; } 2>/dev/null; rm -f "${dir:?}/.$ZMX_SESSION.compact"; set -- "$([ "$before" = working ] && echo working || echo idle)";;
 esac
+zmx() { "$HOME/.local/bin/zmx" "$@" || "$(dirname "$(readlink "$HOME/.local/bin/zmx")")/zmx-0.8" "$@"; }
 if [ "$1" = notify ]; then
-  if "$HOME/.local/bin/zmx" get "$ZMX_SESSION" | tr ' \t' '\n\n' | grep -qx notify=0; then
-    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"muted in ClaudeTTY; don'"'"'t retry"}}'
+  if zmx get "$ZMX_SESSION" | tr ' \t' '\n\n' | grep -qx notify=0; then
+    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"muted in ClaudeTTY; do not retry"}}'
   else
     message=$(printf %s "$input" | jq -j '.tool_input.message // empty')
     [ -z "$message" ] || { printf %s "$message" > "$dir/.$ZMX_SESSION.notice.$$" && mv "$dir/.$ZMX_SESSION.notice.$$" "$dir/$ZMX_SESSION.notice" && rm -f "$dir/$ZMX_SESSION.asked"; }
@@ -59,7 +60,7 @@ if [ "$top" != "$CLAUDE_PID" ]; then
   ps -E -ww -o command= -p "$CLAUDE_PID" | tr ' ' '\n' | grep -q '^CLAUDE_PID=' && exit 0
   printf '%s\n' "$CLAUDE_PID" > "$dir/.$ZMX_SESSION.top"
 fi
-case "$event" in SessionStart|SessionEnd) "$HOME/.local/bin/zmx" set "$ZMX_SESSION" "claude=$([ "$event" = SessionStart ] && printf %s "$input" | jq -r .session_id)" >/dev/null;; esac
+case "$event" in SessionStart|SessionEnd) zmx set "$ZMX_SESSION" "claude=$([ "$event" = SessionStart ] && printf %s "$input" | jq -r .session_id)" >/dev/null;; esac
 transcript="$dir/$ZMX_SESSION.transcript"
 if [ "$event" = SessionStart ] || { [ "$1" = working ] && [ ! -f "$transcript" ]; }; then
   printf %s "$input" | jq -j '.transcript_path // empty' > "$transcript.$$" && mv "$transcript.$$" "$transcript"
@@ -101,7 +102,7 @@ case "$1" in working|action|waiting)
 esac
 case "$1/$event" in agent/*) exit 0;; working/) [ "$status" = working ] && exit 0;; */Stop) [ "$status" = "$1" ] && exit 0;; esac
 if [ "$1" = waiting ]; then
-  "$HOME/.local/bin/zmx" get "$ZMX_SESSION" | tr ' \t' '\n\n' | grep -qx notify=0 || { printf %s "$line" > "$dir/.$ZMX_SESSION.notice.$$" && mv "$dir/.$ZMX_SESSION.notice.$$" "$dir/$ZMX_SESSION.notice" && : > "$dir/$ZMX_SESSION.asked"; }
+  zmx get "$ZMX_SESSION" | tr ' \t' '\n\n' | grep -qx notify=0 || { printf %s "$line" > "$dir/.$ZMX_SESSION.notice.$$" && mv "$dir/.$ZMX_SESSION.notice.$$" "$dir/$ZMX_SESSION.notice" && : > "$dir/$ZMX_SESSION.asked"; }
 elif [ "$status" = waiting ] && [ -f "$dir/$ZMX_SESSION.asked" ]; then
   rm -f "$dir/$ZMX_SESSION.notice" "$dir/$ZMX_SESSION.asked"
 fi

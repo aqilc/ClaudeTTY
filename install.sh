@@ -20,7 +20,8 @@ swift build -c release
 rm -rf "${APP:?}.new" "${APP:?}.old"; mkdir -p $APP.new/Contents/MacOS
 cp .build/release/ClaudeTTY $APP.new/Contents/MacOS/
 D=~/Library/Caches/claudetty-deps; mkdir -p $APP.new/Contents/{Helpers,Resources}
-cp $D/zmx/zmx $APP.new/Contents/Helpers/; cp -R $D/ghostty/zig-out/share/{ghostty,terminfo} $APP.new/Contents/Resources/
+cp $D/zmx/zmx $APP.new/Contents/Helpers/zmx-0.8
+cp $D/zmx-1.0/zig-out/bin/zmx $APP.new/Contents/Helpers/; cp -R $D/ghostty-1.4/zig-out/share/{ghostty,terminfo} $APP.new/Contents/Resources/
 strip -x $APP.new/Contents/MacOS/ClaudeTTY $APP.new/Contents/Helpers/zmx
 I=$D/icon-$(shasum icon.swift | cut -c1-12).icns
 [[ -f $I ]] || { rm -rf $D/icon.iconset; swift icon.swift $D/icon.iconset && iconutil -c icns $D/icon.iconset -o $I; }
@@ -29,7 +30,7 @@ M=$APP.new/Contents/Resources/plugin; mkdir -p $M/.claude-plugin; cp -R plugin $
 print '{"name":"claudetty","owner":{"name":"ClaudeTTY"},"plugins":[{"name":"claudetty","source":"./claudetty"}]}' > $M/.claude-plugin/marketplace.json
 plutil -replace version -string $(cd plugin && find . -type f | sort | xargs cat | shasum | cut -c1-12) $M/claudetty/.claude-plugin/plugin.json
 P=$APP.new/Contents/Info.plist; plutil -create xml1 $P
-for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.3 CFBundleVersion 9 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
+for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.4 CFBundleVersion 16 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
 [[ -n ${CLAUDETTY_RELEASE-} ]] || plutil -insert ClaudeTTYSource -string $PWD $P
 plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"ct","CFBundleURLSchemes":["ct"]}]' $P
 for k in AppBundles AppData AppleEvents AppleMusic AudioCapture BluetoothAlways BluetoothWhileInUse Calendars CalendarsFullAccess CalendarsWriteOnlyAccess \
@@ -43,7 +44,7 @@ plutil -insert Label -string dev.claudetty.keeper $K; plutil -insert BundleProgr
 plutil -insert ProgramArguments -array $K; plutil -insert ProgramArguments -string ClaudeTTY -append $K; plutil -insert ProgramArguments -string --keeper -append $K
 plutil -insert RunAtLoad -bool true $K; plutil -insert KeepAlive -bool true $K; plutil -insert AbandonProcessGroup -bool true $K
 plutil -insert ProcessType -string Interactive $K
-codesign --force --timestamp=none --sign "$SIGN" $APP.new/Contents/Helpers/zmx $APP.new
+codesign --force --timestamp=none --sign "$SIGN" $APP.new/Contents/Helpers/zmx-0.8 $APP.new/Contents/Helpers/zmx $APP.new
 codesign --verify --strict $APP.new
 if [[ -d $APP ]]; then mv $APP $APP.old; fi
 mv $APP.new $APP

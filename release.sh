@@ -11,7 +11,7 @@ else
 fi
 : ${CLAUDETTY_SIGN:?a Developer ID Application identity} ${CLAUDETTY_NOTARY:?a notarytool keychain profile}
 print '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>com.apple.security.automation.apple-events</key><true/></dict></plist>' > $T/entitlements.plist
-codesign --force --options runtime --timestamp --sign "$CLAUDETTY_SIGN" $A/Contents/Helpers/zmx
+codesign --force --options runtime --timestamp --sign "$CLAUDETTY_SIGN" $A/Contents/Helpers/zmx-0.8 $A/Contents/Helpers/zmx
 codesign --force --options runtime --timestamp --entitlements $T/entitlements.plist --sign "$CLAUDETTY_SIGN" $A
 codesign --verify --strict $A
 ln -s /Applications $T/dmg/Applications

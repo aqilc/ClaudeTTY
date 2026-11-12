@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" idle"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "idle"]
           }
         ]
       }
@@ -15,7 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" working"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "working"]
           }
         ]
       }
@@ -25,7 +27,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" working"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "working"]
           }
         ]
       }
@@ -35,7 +38,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" idle"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "idle"]
           }
         ]
       }
@@ -45,7 +49,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" compacting"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "compacting"]
           }
         ]
       }
@@ -55,7 +60,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" compacted"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "compacted"]
           }
         ]
       }
@@ -65,7 +71,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" idle"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "idle"]
           }
         ]
       }
@@ -76,7 +83,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" waiting"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "waiting"]
           }
         ]
       }
@@ -87,7 +95,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" send",
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "send"],
             "timeout": 150
           }
         ]
@@ -97,7 +106,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" notify"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "notify"]
           }
         ]
       },
@@ -106,7 +116,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" waiting"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "waiting"]
           }
         ]
       },
@@ -114,7 +125,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" action"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "action"]
           }
         ]
       }
@@ -124,7 +136,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" "
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh"]
           }
         ]
       }
@@ -134,7 +147,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" waiting"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "waiting"]
           }
         ]
       }
@@ -144,7 +158,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" agent"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "agent"]
           }
         ]
       }
@@ -154,7 +169,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/status.sh\" agent"
+            "command": "sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/status.sh", "agent"]
           }
         ]
       }

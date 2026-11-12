@@ -17,6 +17,7 @@ A tab is a zmx session; `<tab>` is its session name (`ct list`'s second column, 
 | Bring a tab forward | `ct focus <tab>` |
 | Type into a tab (`\r` = Enter) | `zmx send <tab> "text"` then `zmx send <tab> $'\r'` |
 | Read what is typed in its prompt box, not yet sent (empty if none; exit 1 if no Claude box shows) | `ct prompt <tab>` |
+| Quit its Claude and resume the same conversation in place, its draft typed back (exit 1 if it runs no Claude or is working) | `ct restart <tab>` |
 | Read its screen | `zmx history <tab> \| tail -60` |
 | Close it | `zmx kill <tab>` |
 | Leave this tab a notice | `ct notify <text>` |
@@ -36,4 +37,4 @@ A tab opens in the folder `ct` runs from, so a task gets its own worktree and Cl
 git worktree add ../fix-login && cd ../fix-login && ct tasks fix-login claude
 ```
 
-zmx is linked beside `ct` (`~/.local/bin`). A group named `list`, `events`, `wait`, `focus`, `split`, `notify`, `prompt`, `reload` or `help`, or starting with `-`, can't be opened with `ct`, nor a tab named `logs` (zmx's own folder). Rename in the app: a zmx label set from outside doesn't reach the running app.
+zmx is linked beside `ct` (`~/.local/bin`). A tab `zmx list` shows `status=unreachable` may be one made before ClaudeTTY's zmx 1.0 (it restarts once when idle): until then only `"$(dirname "$(readlink ~/.local/bin/zmx)")/zmx-0.8"` reaches it, so use that for its `send`, `history` and `kill` (zmx's own `kill` hangs on it). A group named `list`, `events`, `wait`, `focus`, `split`, `notify`, `prompt`, `restart`, `reload` or `help`, or starting with `-`, can't be opened with `ct`, nor a tab named `logs` (zmx's own folder). Rename in the app: a zmx label set from outside doesn't reach the running app.
