@@ -460,20 +460,20 @@
   <div class="cards">
     <div class="card marks">
       <div class="duo"><div class="morph"><i class="m" data-cycle="think,compose,write,read,search,code,default,blocked"></i><span>Thinking</span></div><div class="pills"><button data-to="think"><i class="m" data-m="think"></i>Thinking</button><button data-to="compose"><i class="m" data-m="compose"></i>Writing</button><button data-to="write"><i class="m" data-m="write"></i>Edit</button><button data-to="read"><i class="m" data-m="read"></i>Read</button><button data-to="search"><i class="m" data-m="search"></i>Search</button><button data-to="code"><i class="m" data-m="code"></i>Bash</button><button data-to="default"><i class="m" data-m="default"></i>Other tools</button><button data-to="blocked"><i class="m" data-m="blocked"></i>Waiting on you</button></div></div>
-      <p><b>See what every Claude is doing.</b> Each tab's dots move for what its Claude is doing, or switch to Clawd and he acts it out. Waiting on you turns amber.</p>
+      <p><b>See what every session is doing.</b> Each tab's dots move for what its session is doing, or switch to Clawd and he acts it out. Waiting on you turns amber.</p>
       <small>These are the app's own frames, dumped from Marks.swift and played at 60 fps. In the app the dots hold for a quarter second, so quick file reads don't strobe.</small>
     </div>
     <div class="card nap">
       <div class="tab"><b>weather</b><canvas width="32" height="34"></canvas><span><b>docs:</b> <em>Edit README.md</em></span><code>~/code/weather</code></div>
       <button>Leave it for 20 minutes</button>
-      <p><b>Tabs sleep.</b> 20 minutes after a Claude's last message its process exits and the memory comes back. Click the tab and it picks up the same conversation.</p>
-      <small>A sleeping Claude's prompt cache runs out after an hour and Clawd turns icy cyan, since the next message costs more. ClaudeTTY &gt; Keep Asleep Tabs Warm pings it at 49 minutes instead.</small>
+      <p><b>Tabs sleep.</b> 20 minutes after a session's last message its process exits and the memory comes back. Click the tab and it picks up the same conversation.</p>
+      <small>A sleeping session's prompt cache runs out after an hour and Clawd turns icy cyan, since the next message costs more. ClaudeTTY &gt; Keep Asleep Tabs Warm pings it at 49 minutes instead.</small>
     </div>
     <div class="card player">
       <div class="chapters">
-        <button class="on" data-src="media/survive.mp4" data-ms="7875"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every Claude keeps working.</span><i></i></button>
+        <button class="on" data-src="media/survive.mp4" data-ms="8425"><b>You can't lose something if you want to.</b><span>Each tab runs in a <a href="https://github.com/neurosnap/zmx">zmx</a> session outside the app. Quit, crash or update it and every session keeps working.</span><i></i></button>
         <button data-src="media/sidebar.mp4" data-ms="9333"><b>Animations and polish.</b><span>Tabs and groups slide aside as you drag, and the sidebar slides like a native Mac one. Satisfying. <kbd>⌘B</kbd> for less satisfaction but some more practicality.</span><i></i></button>
-        <button data-src="media/mod.mp4" data-ms="14892"><b>Change it yourself.</b><span>Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
+        <button data-src="media/mod.mp4" data-ms="14491"><b>Change it yourself.</b><span>Change something (or ask Claude to), run <code>./install.sh</code>, and the open window switches to the new build like magic.</span><i></i></button>
       </div>
       <video autoplay muted loop playsinline poster="media/survive.webp" width="1180" height="780" role="img" aria-label="The app is killed and reopened with every tab still running"></video>
     </div>
@@ -495,7 +495,7 @@
       <button>Quit ClaudeTTY</button>
     </div>
     <div class="facts">
-      <p><b>Tabs live outside the app.</b> Each one is a <a href="https://github.com/neurosnap/zmx">zmx</a> session, its own process holding a shell and its Claude. The app only attaches to them, so quitting, crashing or updating it never touches what's running.</p>
+      <p><b>Tabs live outside the app.</b> Each one is a <a href="https://github.com/neurosnap/zmx">zmx</a> session, its own process holding a shell and Claude Code. The app only attaches to them, so quitting, crashing or updating it never touches what's running.</p>
       <p><b>Ghostty underneath.</b> Every pane is GhosttyKit, built from pinned, patched Ghostty source. zmx runs the same terminal core, so a tab looks the same after the app reattaches.</p>
       <p><b>About 7,000 lines in three files.</b> <code>ClaudeTTY.swift</code>, <code>Marks.swift</code> and <code>Surface.swift</code>. Small enough to read in an afternoon, or to have Claude change for you.</p>
     </div>
@@ -534,7 +534,7 @@
       <p><span>Wave</span>Only over SSH, and only if you turn it on</p>
       <p><span>Ghostty</span>Every tab is gone</p>
     </div>
-    <div class="card"><b>What each Claude is doing</b>
+    <div class="card"><b>What each session is doing</b>
       <p class="us"><span>ClaudeTTY</span>8 live marks, amber when it needs you</p>
       <p><span>cmux</span>A ring when one needs you</p>
       <p><span>herdr</span>Working or blocked</p>
@@ -553,12 +553,12 @@
       <p><span>Ghostty</span>No</p>
     </div>
   </div>
-  <p class="note">macOS 27.0 on an M4 Pro with 48 GB. cmux 0.65.2 ran on my own setup with about 4 months of Claude history, since plenty of people have used it that long or longer. Superset 1.39.0, Warp 0.2026.10.14 and Wave 0.14.5 ran on fresh profiles, and Ghostty is 1.3.1. herdr 0.9.5 runs inside your terminal, so its numbers are herdr plus Ghostty (herdr alone is 25 MB, 0.2% and 24 MB). Restart behavior is from the <a href="https://herdr.dev/docs/session-state/">herdr docs</a> and the <a href="https://github.com/manaflow-ai/cmux">cmux README</a>, and the same table is in the <a href="https://github.com/aqilc/ClaudeTTY#compared-to-cmux-and-others">README</a>.</p>
+  <p class="note">macOS 27.0 on an M4 Pro with 48 GB. herdr runs inside your terminal, so its numbers include Ghostty. The same table is in the <a href="https://github.com/aqilc/ClaudeTTY#compared-to-cmux-and-others">README</a>.</p>
 </section>
 
 <section id="ct">
   <h2>ct</h2>
-  <p>ClaudeTTY installs a Claude Code plugin and a <code>ct</code> command, so the Claude in one tab can open, watch and steer the others.</p>
+  <p>A Claude Code plugin and a <code>ct</code> command let the session in one tab open, watch and steer the others.</p>
 <pre class="run"><span>ct list                          <em># every tab, its group, folder and Claude state</em></span><span>ct web dev bun run dev           <em># open tab "dev" in group "web", running a command</em></span><span>ct split dev right agent claude  <em># a new pane beside it with Claude in it</em></span><span>ct wait agent idle               <em># block until that Claude is done</em></span><span>zmx send agent "run the tests"   <em># type into it</em></span></pre>
   <div class="win">
     <div class="side"><div class="on"><b>web</b><canvas width="32" height="34"></canvas><span>site</span></div><div><b>api</b><canvas width="32" height="34"></canvas><span>asleep</span></div></div>
