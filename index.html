@@ -38,8 +38,8 @@
   .download small { color: var(--muted); font-size: 14px; }
   .hero { display: block; margin: 0 -24px; }
   /* the first frame until the video plays, or for good where autoplay is refused (iOS Low Power Mode) */
-  .hero video { background: url(media/window-light.webp) 50% / cover; }
-  @media (prefers-color-scheme: dark) { .hero video { background-image: url(media/window-dark.webp); } }
+  .hero video { background: url(media/hero-light.webp) 50% / cover; }
+  @media (prefers-color-scheme: dark) { .hero video { background-image: url(media/hero-dark.webp); } }
 
   section { padding-top: 96px; }
   h2 { margin: 0 0 24px; font: 600 13px var(--mono); color: var(--muted); }
@@ -78,9 +78,7 @@
     header canvas { width: 72px; height: 77px; top: 0; }
     h1 { font-size: 40px; }
     h1 + p { font-size: 17px; }
-    /* the window at phone width is 3 px text: crop to its sidebar and the start of the chat, edge to edge */
-    .hero, .clip img { margin: 0 -20px; }
-    .hero video { width: 100%; aspect-ratio: 39 / 44; object-fit: cover; object-position: 8% 45%; background-position: 8% 45%; }
+    .hero, .clip img { margin: 0 -20px; }   /* the demo's camera pushes in on what's readable, so phones get the whole frame edge to edge */
     .clip { grid-template-columns: 1fr; gap: 14px; }
     .clip img { max-width: none; width: calc(100% + 40px); aspect-ratio: 1; object-fit: cover; object-position: 2% 4%; border-radius: 0; }
     /* the 4 x 2 dots grid splits into two 2 x 2 halves so the labels stay readable */
@@ -102,12 +100,11 @@
   main a.row.on { background: var(--blue); color: #fff; }
   main a.row.on span, main a.row.on span b { color: #fff; }
   main section h2 { display: none; }
-  #top > section { padding-top: 48px; }
 
   main a.row { cursor: pointer; }
   /* sections butt together, so the next row pushes the stuck one off with no gap, like iOS list headers */
-  section, #top > section { padding: 0; }
-  #top > section { padding-top: 48px; }   /* the first row stands clear of the hero */
+  section { padding: 0; }
+  #top { padding-bottom: 48px; }   /* the first row stands clear of the hero */
   section::after { content: ''; display: block; height: 56px; }
   main a.row { margin-bottom: 0; }
   main a.row + :not(h2), main a.row + h2 + * { margin-top: 18px; }
@@ -173,13 +170,10 @@
     #top, main > section, footer { max-width: 1200px; margin-inline: auto; }
     #top { display: grid; grid-template-columns: 1fr auto; column-gap: 40px; align-items: end; }
     #top > .download { margin: 0; flex-direction: column; align-items: flex-end; gap: 10px; text-align: right; }
-    #top > .band, #top > section { grid-column: 1 / -1; }
+    #top > .band { grid-column: 1 / -1; }
     .band { margin-top: 44px; }
-    /* the window cut out of its README backdrop (gif px 63,63 1146 x 719 inside its 1 px border ring, radius 22: its corner arc, measured on the diagonal) */
-    .hero { display: block; margin: 0; aspect-ratio: 1146 / 719; overflow: hidden; border-radius: 1.92% / 3.06%; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 24px 70px rgba(0,0,0,.35); }
-    .hero video { width: 111%; max-width: none; margin: -5.5% 0 0 -5.5%; }
-    #top > section { columns: 2; column-gap: 56px; padding-top: 48px; }
-    #top > section p { max-width: none; margin: 0; break-inside: avoid; }
+    .hero { display: block; margin: 0; overflow: hidden; border-radius: 12px; box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 24px 70px rgba(0,0,0,.35); }
+    .hero video { width: 100%; }   /* past its 954 px width attribute: the band is wider */
     .clip, .player { grid-template-columns: 340px minmax(0, 1fr); gap: 56px; }
     .player video { max-width: min(100%, 900px); }
     #numbers { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 56px; align-items: start; }
@@ -245,6 +239,7 @@
   .nap.asleep .tab { background: color-mix(in srgb, var(--side) 70%, transparent); color: var(--ink); }
   .nap.asleep .tab span, .nap.asleep .tab code { color: color-mix(in srgb, var(--ink) 65%, transparent); }
   .nap.asleep .tab span b { color: var(--ink); }
+  .nap .saved { display: block; margin-top: 12px; }
 
   /* inside: the app and the zmx sessions it attaches to; quit it and they keep going */
   .stack { display: flex; flex-direction: column; align-items: center; --gap: 10px; }
@@ -400,7 +395,6 @@
   #ct :is(pre, .win) { margin-top: var(--unit); }
   #numbers .stats { margin-top: var(--unit); }
   @media (min-width: 1001px) { #install .drop { margin-top: 24px; } }   /* top edge with the first paragraph */
-  #top > section > p + p { margin-top: var(--unit); }
   .cards, .vs { gap: var(--unit); }
   .card { padding: var(--unit); }
 
@@ -421,7 +415,7 @@
 </head>
 <body>
 <aside>
-  <a href="#top" class="on"><b>claudetty</b><canvas width="32" height="34"></canvas><span><b>why:</b> I took the file trees out</span><code>~/claudetty</code></a>
+  <a href="#top" class="on"><b>claudetty</b><canvas width="32" height="34"></canvas><span><b>tabs:</b> 6 running</span><code>~/claudetty</code></a>
   <a href="#looks"><b>looks</b><canvas width="32" height="34"></canvas><span><b>dots:</b> Thinking…</span><code>~/looks</code></a>
   <a href="#inside"><b>inside</b><canvas width="32" height="34"></canvas><span><b>zmx:</b> 4 sessions</span><code>~/inside</code></a>
   <a href="#numbers"><b>numbers</b><canvas width="32" height="34"></canvas><span><b>memory:</b> 68 MB</span><code>~/numbers</code></a>
@@ -444,15 +438,10 @@
     <small>macOS 26 or later, Apple Silicon.<br>Free, and the source is on <a href="https://github.com/aqilc/ClaudeTTY">GitHub</a>.</small>
   </div>
 
-  <div class="band"><div class="hero"><video autoplay muted loop playsinline width="954" height="657" role="img" aria-label="ClaudeTTY over a sunset, blurring it, with Claude editing a file in one tab">
-    <source src="media/window-dark.mp4" media="(prefers-color-scheme: dark)">
-    <source src="media/window-light.mp4">
+  <div class="band"><div class="hero"><video autoplay muted loop playsinline width="954" height="665" role="img" aria-label="Claude Code starting four more sessions in new tabs, then ClaudeTTY quit and reopened with all of them still working">
+    <source src="media/hero-dark.mp4" media="(prefers-color-scheme: dark)">
+    <source src="media/hero-light.mp4">
   </video></div></div>
-
-  <section>
-    <p><b>Why.</b> I let Claude write the code and only step in now and then. You don't really need file trees or editors for that, so I took them out.</p>
-    <p><b>Before this.</b> I used cmux, but it crashed a lot and updates killed everything. ClaudeTTY keeps the layout I liked, groups in a sidebar and tabs in the titlebar, without the bloat.</p>
-  </section>
 </div>
 
 <section id="looks">
@@ -465,6 +454,7 @@
     </div>
     <div class="card nap">
       <div class="tab"><b>weather</b><canvas width="32" height="34"></canvas><span><b>docs:</b> <em>Edit README.md</em></span><code>~/code/weather</code></div>
+      <img class="saved" src="media/sleep.png" width="203" height="54" alt="The sidebar menu reading 37 tabs, 7.28 GB saved">
       <button>Leave it for 20 minutes</button>
       <p><b>Tabs sleep.</b> 20 minutes after a session's last message its process exits and the memory comes back. Click the tab and it picks up the same conversation.</p>
       <small>A sleeping session's prompt cache runs out after an hour and Clawd turns icy cyan, since the next message costs more. ClaudeTTY &gt; Keep Asleep Tabs Warm pings it at 49 minutes instead.</small>
@@ -520,8 +510,8 @@
     <div><b>15×</b><span>less memory than cmux</span></div>
     <div><b>103×</b><span>less idle CPU than cmux</span></div>
     <div><b>2.3×</b><span>faster launch than cmux</span></div>
-    <div><b>23×</b><span>smaller than cmux</span></div>
-    <div><b>3×</b><span>smaller than Ghostty</span></div>
+    <div><b>25×</b><span>smaller than cmux</span></div>
+    <div><b>3.4×</b><span>smaller than Ghostty</span></div>
     <div><b>140-180 MB</b><span>15 tabs, idle ones asleep</span></div>
   </div>
   <div class="vs">
@@ -790,9 +780,10 @@ new IntersectionObserver(([entry], observer) => { if (entry.isIntersecting) { pl
 
 const sheet = document.querySelector('aside');
 if (matchMedia('(max-width: 1000px)').matches) rows.forEach((row, i) => {
-  const copy = row.cloneNode(true), at = i ? targets[i] : targets[0].querySelector('section');
+  if (!i) return;   // the top is the hero: no row heads it
+  const copy = row.cloneNode(true);
   copy.classList.add('row');
-  at.prepend(copy);
+  targets[i].prepend(copy);
   copy.addEventListener('click', e => { e.preventDefault(); sheet.classList.add('open'); });
   const mark = clawd(copy.querySelector('canvas'), i ? 'asleep' : 'idle'), own = marks[i];
   marks[i] = { set: to => { own.set(to); mark.set(to); } };
