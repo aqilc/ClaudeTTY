@@ -11,14 +11,16 @@ final class SurfaceView: NSView, NSTextInputClient {
     private var leadSurrogate: UTF16Char?
     private var lastPerformKeyEvent: TimeInterval?
     private var suppressNextLeftMouseUp = false
+    private(set) var revealing = false
     private var eventMonitor: Any?
     private(set) var focused = false
     var onFocus: (() -> Void)?
+    var onAnswer: (() -> Void)?
     var cellSize: CGSize = .zero
     var edge: (color: NSColor, explicit: Bool)?
     var find: FindBar?
     var onDrop: ((NSPasteboard) -> [String])?
-    var tabItems: (() -> (claude: Bool, brief: String?, items: [NSMenuItem]))?
+    var tabItems: (() -> (claude: Bool, summary: String?, items: [NSMenuItem]))?
     private(set) var scrolled: UInt64 = 0
     private var restoring = false
     private var settle: DispatchWorkItem?
@@ -31,6 +33,22 @@ final class SurfaceView: NSView, NSTextInputClient {
             badge.map(addSubview)
             placeBadge()
         }
+    }
+
+    private(set) var pathBox: PathBox?
+
+    func box(_ link: ghostty_action_mouse_over_link_s?) {
+        let scale = window?.backingScaleFactor ?? 2, row = cellSize.height * scale
+        let rows = link.flatMap { row > 0 ? max(1, Int((CGFloat($0.y1 - $0.y0) / row).rounded())) : nil } ?? 0
+        let rects = (0..<rows).map { i in
+            let x0 = CGFloat(i == 0 ? link!.x0 : link!.left), x1 = CGFloat(i == rows - 1 ? link!.x1 : link!.right), top = CGFloat(link!.y0) + CGFloat(i) * row
+            return CGRect(x: x0 / scale, y: bounds.height - (top + row) / scale, width: (x1 - x0) / scale, height: row / scale)
+        }
+        if pathBox == nil, !rects.isEmpty {
+            pathBox = PathBox()
+            addSubview(pathBox!, positioned: .below, relativeTo: nil)
+        }
+        pathBox?.rects = rects
     }
 
     init(app: ghostty_app_t, command: String, cwd: String) {
@@ -151,6 +169,7 @@ final class SurfaceView: NSView, NSTextInputClient {
               let location = window.contentView?.convert(event.locationInWindow, from: nil),
               window.contentView?.hitTest(location) == self else { return event }
         suppressNextLeftMouseUp = false
+        if event.modifierFlags.isSuperset(of: [.control, .command]) { return reveal(event) }
         guard window.firstResponder !== self else { return event }
         window.makeFirstResponder(self)
         if NSApp.isActive && window.isKeyWindow {
@@ -158,6 +177,16 @@ final class SurfaceView: NSView, NSTextInputClient {
             return nil
         }
         return event
+    }
+
+    private func reveal(_ event: NSEvent) -> NSEvent? {
+        let click = NSEvent.mouseEvent(with: .leftMouseDown, location: event.locationInWindow, modifierFlags: event.modifierFlags.subtracting(.control), timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil, eventNumber: event.eventNumber, clickCount: event.clickCount, pressure: event.pressure)!
+        revealing = true
+        _ = mouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, click)
+        _ = mouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, click)
+        DispatchQueue.main.async { self.revealing = false }
+        suppressNextLeftMouseUp = true
+        return nil
     }
 
     private func localKeyUp(_ event: NSEvent) -> NSEvent? {
@@ -176,7 +205,10 @@ final class SurfaceView: NSView, NSTextInputClient {
     private static let buttons = [GHOSTTY_MOUSE_LEFT, GHOSTTY_MOUSE_RIGHT, GHOSTTY_MOUSE_MIDDLE, GHOSTTY_MOUSE_EIGHT, GHOSTTY_MOUSE_NINE, GHOSTTY_MOUSE_SIX, GHOSTTY_MOUSE_SEVEN, GHOSTTY_MOUSE_FOUR, GHOSTTY_MOUSE_FIVE, GHOSTTY_MOUSE_TEN, GHOSTTY_MOUSE_ELEVEN]
     private static func button(_ number: Int) -> ghostty_input_mouse_button_e { buttons.indices.contains(number) ? buttons[number] : GHOSTTY_MOUSE_UNKNOWN }
 
-    override func mouseDown(with event: NSEvent) { _ = mouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, event) }
+    override func mouseDown(with event: NSEvent) {
+        suppressNextLeftMouseUp = false
+        _ = mouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, event)
+    }
 
     override func mouseUp(with event: NSEvent) {
         if suppressNextLeftMouseUp {
@@ -201,6 +233,7 @@ final class SurfaceView: NSView, NSTextInputClient {
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         mouseMoved(with: event)
+        if UserDefaults.standard.bool(forKey: ClaudeTTY.followKey), window?.isKeyWindow == true || probe != nil, window?.firstResponder is SurfaceView { window?.makeFirstResponder(self) }
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -211,7 +244,8 @@ final class SurfaceView: NSView, NSTextInputClient {
 
     override func mouseMoved(with event: NSEvent) {
         let pos = convert(event.locationInWindow, from: nil)
-        if let surface { ghostty_surface_mouse_pos(surface, pos.x, frame.height - pos.y, ghosttyMods(event.modifierFlags)) }
+        let flags = event.modifierFlags.contains(.command) ? event.modifierFlags.subtracting(.control) : event.modifierFlags
+        if let surface { ghostty_surface_mouse_pos(surface, pos.x, frame.height - pos.y, ghosttyMods(flags)) }
     }
 
     override func mouseDragged(with event: NSEvent) { mouseMoved(with: event) }
@@ -225,6 +259,7 @@ final class SurfaceView: NSView, NSTextInputClient {
         let factor = precise ? 2.0 : 1.0
         let momentum = Int32(Self.phases.firstIndex(of: event.momentumPhase).map { $0 + 1 } ?? 0)
         ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX * factor, event.scrollingDeltaY * factor, (precise ? 1 : 0) | momentum << 1)
+        mouseMoved(with: event)
     }
 
     private static let phases: [NSEvent.Phase] = [.began, .stationary, .changed, .ended, .cancelled, .mayBegin]
@@ -240,6 +275,8 @@ final class SurfaceView: NSView, NSTextInputClient {
             interpretKeyEvents([event])
             return
         }
+        if !readonly, markedText.length == 0, !event.isARepeat, event.modifierFlags.isDisjoint(with: [.command, .control, .option]),
+           let key = event.charactersIgnoringModifiers, ["\r", "\u{3}"].contains(key) || ("1"..."9").contains(key) { onAnswer?() }
         let translationModsGhostty = eventModifierFlags(ghostty_surface_key_translation_mods(surface, ghosttyMods(event.modifierFlags)))
         let translationMods = event.modifierFlags.subtracting([.shift, .control, .option, .command]).union(translationModsGhostty)
         let translationEvent = translationMods == event.modifierFlags ? event : NSEvent.keyEvent(
@@ -349,7 +386,10 @@ final class SurfaceView: NSView, NSTextInputClient {
             }
             if sidePressed { action = GHOSTTY_ACTION_PRESS }
         }
-        _ = keyAction(action, event: event)
+        guard event.modifierFlags.contains(.command), let surface else { return _ = keyAction(action, event: event) }
+        var keyEvent = event.ghosttyKeyEvent(action)
+        keyEvent.mods = ghosttyMods(event.modifierFlags.subtracting(.control))
+        _ = ghostty_surface_key(surface, keyEvent)
     }
 
     private func keyAction(_ action: ghostty_input_action_e, event: NSEvent, translationEvent: NSEvent? = nil, text: String? = nil, composing: Bool = false) -> Bool {
@@ -407,7 +447,7 @@ final class SurfaceView: NSView, NSTextInputClient {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let tab = tabItems?()
-        if let brief = tab?.brief { menu.addItem(.sectionHeader(title: brief)) }
+        if let summary = tab?.summary { menu.addItem(.sectionHeader(title: summary)) }
         for (title, action) in [("Copy", "copy_to_clipboard"), ("Paste", "paste_from_clipboard"), ("", ""), ("Split Right", "new_split:right"), ("Split Down", "new_split:down"), ("", ""), ("Find…", "start_search")] where tab?.claude != true || title != "Copy" {
             guard !title.isEmpty else {
                 menu.addItem(.separator())
@@ -598,6 +638,29 @@ func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
     if raw & UInt(NX_DEVICERALTKEYMASK) != 0 { mods |= GHOSTTY_MODS_ALT_RIGHT.rawValue }
     if raw & UInt(NX_DEVICERCMDKEYMASK) != 0 { mods |= GHOSTTY_MODS_SUPER_RIGHT.rawValue }
     return ghostty_input_mods_e(mods)
+}
+
+final class PathBox: NSView {
+    var rects: [CGRect] = [] {
+        didSet {
+            isHidden = rects.isEmpty
+            guard !rects.isEmpty else { return }
+            frame = rects.reduce(CGRect.null) { $0.union($1) }.insetBy(dx: -4, dy: -2)
+            needsDisplay = true
+        }
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        for rect in rects {
+            let box = NSBezierPath(roundedRect: convert(rect, from: superview).insetBy(dx: -3, dy: -1), xRadius: 4, yRadius: 4)
+            box.lineWidth = 1.25
+            box.lineCapStyle = .round
+            box.setLineDash([0, 3], count: 2, phase: 0)
+            ink(0.5).setStroke()
+            box.stroke()
+        }
+    }
 }
 
 extension NSEvent {

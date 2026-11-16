@@ -1,6 +1,29 @@
 zmx #294: Daemon.deinit freed socket_path, which the caller allocated before the fork with another allocator (Daemon.init: "Caller is responsible for freeing all variables passed into the init fn"); every session exit aborted in libmalloc.
 The daemon compresses its scrollback once output rests a second, as the app's renderer does (Terminal.compress): zmx never called it, so a long-scrollback tab's daemon kept every page resident.
-A command naming a session a zmx 0.8 daemon serves runs as the bundled zmx-0.8 (forwardOld): 0.8 frames its header as a packed { tag, len: u32 }, so it reads our protocol version byte as a payload length and never answers. An app built for 0.8 that an update swapped to this binary called `zmx history` on its main thread and froze (1.2.3 to 1.2.4).
+A command naming a session a zmx 0.8 daemon serves fails at once (refuseOld): 0.8 frames its header as a packed { tag, len: u32 }, so it reads our protocol version byte as a payload length and never answers. An app built for 0.8 that an update swapped to this binary called `zmx history` on its main thread and froze (1.2.3 to 1.2.4).
+diff --git a/src/ipc.zig b/src/ipc.zig
+index ad05c2b..5f785d7 100644
+--- a/src/ipc.zig
++++ b/src/ipc.zig
+@@ -254,6 +254,18 @@ pub fn connectSession(socket_path: []const u8) ConnectError!i32 {
+     };
+ }
+ 
++pub fn oldProtocol(socket_path: []const u8) bool {
++    const fd = connectSession(socket_path) catch return false;
++    defer lib_posix.close(fd);
++    send(fd, .Info, "") catch return false;
++    send(fd, .LabelGet, "") catch {};
++    var poll_fds = [_]lib_posix.pollfd{.{ .fd = fd, .events = lib_posix.POLL.IN, .revents = 0 }};
++    if ((lib_posix.poll(&poll_fds, 1000) catch return false) == 0) return false;
++    var reply: [@sizeOf(Header)]u8 = undefined;
++    const n = lib_posix.read(fd, &reply) catch return false;
++    return n >= 2 and reply[1] != PROTOCOL_VERSION;
++}
++
+ const SessionProbeError = error{
+     Timeout,
+     ConnectionRefused,
 diff --git a/src/loop.zig b/src/loop.zig
 index f5d6708..53856e6 100644
 --- a/src/loop.zig
@@ -54,35 +77,16 @@ index f5d6708..53856e6 100644
          .running = true,
          .pid = 0,
          .created_at = 0,
---- a/src/ipc.zig
-+++ b/src/ipc.zig
-@@ -252,6 +251,18 @@
-         error.ConnectionRefused => return error.ConnectionRefused,
-         else => return error.Unexpected,
-     };
-+}
-+
-+pub fn oldProtocol(socket_path: []const u8) bool {
-+    const fd = connectSession(socket_path) catch return false;
-+    defer lib_posix.close(fd);
-+    send(fd, .Info, "") catch return false;
-+    send(fd, .LabelGet, "") catch {};
-+    var poll_fds = [_]lib_posix.pollfd{.{ .fd = fd, .events = lib_posix.POLL.IN, .revents = 0 }};
-+    if ((lib_posix.poll(&poll_fds, 1000) catch return false) == 0) return false;
-+    var reply: [@sizeOf(Header)]u8 = undefined;
-+    const n = lib_posix.read(fd, &reply) catch return false;
-+    return n >= 2 and reply[1] != PROTOCOL_VERSION;
- }
- 
- const SessionProbeError = error{
+diff --git a/src/main.zig b/src/main.zig
+index 183b736..d1c4c8b 100644
 --- a/src/main.zig
 +++ b/src/main.zig
-@@ -31,6 +28,30 @@
+@@ -31,6 +31,23 @@ fn printError(io: std.Io, comptime fmt: []const u8, args: anytype) noreturn {
      w.interface.flush() catch {};
      std.process.exit(1);
  }
 +
-+fn forwardOld(gpa: std.mem.Allocator, io: std.Io, cfg: *Cfg, args: std.process.Args) !void {
++fn refuseOld(gpa: std.mem.Allocator, io: std.Io, cfg: *Cfg, args: std.process.Args) !void {
 +    const argv = try args.toSlice(gpa);
 +    defer gpa.free(argv);
 +    var i: usize = 2;
@@ -95,24 +99,17 @@ index f5d6708..53856e6 100644
 +    const socket_path = socket.getSocketPath(gpa, cfg.socket_dir, sesh) catch return;
 +    defer gpa.free(socket_path);
 +    if (!ipc.oldProtocol(socket_path)) return;
-+    var dir: [std.fs.max_path_bytes]u8 = undefined;
-+    const n = std.process.executableDirPath(io, &dir) catch |err| printError(io, "session \"{s}\" runs zmx 0.8 ({s})", .{ argv[i], @errorName(err) });
-+    const sibling = try std.fs.path.join(gpa, &.{ dir[0..n], "zmx-0.8" });
-+    const forwarded = try gpa.alloc([]const u8, argv.len);
-+    for (forwarded, argv) |*to, from| to.* = from;
-+    forwarded[0] = sibling;
-+    const err = std.process.replace(io, .{ .argv = forwarded });
-+    printError(io, "session \"{s}\" runs zmx 0.8 and {s} can't run ({s})", .{ argv[i], sibling, @errorName(err) });
++    printError(io, "session \"{s}\" runs zmx 0.8, which ClaudeTTY no longer reaches", .{argv[i]});
 +}
 +
  pub fn main(init: std.process.Init) !void {
      mainImpl(init) catch |err| switch (err) {
          error.Sighup => signal.reraise(.HUP),
-@@ -56,6 +77,7 @@
+@@ -56,6 +73,7 @@ fn mainImpl(init: std.process.Init) !void {
  
      var cfg = try Cfg.init(gpa, io);
      defer cfg.deinit(gpa);
-+    try forwardOld(gpa, io, &cfg, init.minimal.args);
++    try refuseOld(gpa, io, &cfg, init.minimal.args);
  
      const log_path = try std.fs.path.join(gpa, &.{ cfg.log_dir, "zmx.log" });
      defer gpa.free(log_path);

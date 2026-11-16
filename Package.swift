@@ -9,6 +9,7 @@ let package = Package(
         .executableTarget(
             name: "ClaudeTTY",
             dependencies: ["GhosttyKit"],
+            swiftSettings: [.unsafeFlags(["-Osize"])],
             linkerSettings: [.linkedLibrary("c++"), .linkedFramework("Carbon"), .linkedFramework("Metal"), .linkedFramework("QuartzCore"), .linkedFramework("IOSurface")]),
     ]
 )

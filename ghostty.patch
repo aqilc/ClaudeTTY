@@ -1,7 +1,21 @@
 diff --git a/include/ghostty.h b/include/ghostty.h
+index 439195c75..ee0296936 100644
 --- a/include/ghostty.h
 +++ b/include/ghostty.h
-@@ -865,6 +865,8 @@
+@@ -799,6 +799,12 @@ typedef enum {
+ typedef struct {
+   const char* url;
+   size_t len;
++  uint32_t x0;
++  uint32_t y0;
++  uint32_t x1;
++  uint32_t y1;
++  uint32_t left;
++  uint32_t right;
+ } ghostty_action_mouse_over_link_s;
+ 
+ // apprt.action.SizeLimit
+@@ -865,6 +871,8 @@ typedef enum {
    GHOSTTY_ACTION_COLOR_KIND_FOREGROUND = -1,
    GHOSTTY_ACTION_COLOR_KIND_BACKGROUND = -2,
    GHOSTTY_ACTION_COLOR_KIND_CURSOR = -3,
@@ -11,9 +25,10 @@ diff --git a/include/ghostty.h b/include/ghostty.h
  
  // apprt.action.ColorChange
 diff --git a/src/Surface.zig b/src/Surface.zig
+index 7f7b1df88..b0b2155fc 100644
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
-@@ -368,10 +368,8 @@
+@@ -368,10 +368,8 @@ const DerivedConfig = struct {
              var links: std.ArrayList(DerivedConfig.Link) = .empty;
              defer links.deinit(alloc);
              for (config.link.links.items) |link| {
@@ -25,7 +40,7 @@ diff --git a/src/Surface.zig b/src/Surface.zig
                      .action = link.action,
                      .highlight = link.highlight,
                  });
-@@ -379,10 +377,7 @@
+@@ -379,10 +377,7 @@ const DerivedConfig = struct {
  
              break :links try links.toOwnedSlice(alloc);
          };
@@ -37,7 +52,7 @@ diff --git a/src/Surface.zig b/src/Surface.zig
  
          return .{
              .original_font_size = config.@"font-size",
-@@ -440,7 +435,6 @@
+@@ -440,7 +435,6 @@ const DerivedConfig = struct {
      }
  
      pub fn deinit(self: *DerivedConfig) void {
@@ -45,7 +60,7 @@ diff --git a/src/Surface.zig b/src/Surface.zig
          self.arena.deinit();
      }
  
-@@ -1089,6 +1083,12 @@
+@@ -1089,6 +1083,12 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
              );
          },
  
@@ -58,7 +73,50 @@ diff --git a/src/Surface.zig b/src/Surface.zig
          .set_mouse_shape => |shape| {
              log.debug("changing mouse shape: {}", .{shape});
              _ = try self.rt_app.performAction(
-@@ -1867,6 +1867,15 @@
+@@ -1684,14 +1684,29 @@ fn mouseRefreshLinks(
+         const link = (try self.linkAtPos(pos)) orelse break :link .{ null, false };
+         switch (link.action) {
+             .open => {
+-                const str = try self.io.terminal.screens.active.selectionString(alloc, .{
++                const screen = self.io.terminal.screens.active;
++                const str = try screen.selectionString(alloc, .{
+                     .sel = link.selection,
+                     .trim = false,
+                 });
+-                break :link .{
+-                    .{ .url = str },
+-                    self.config.link_previews == .true,
+-                };
++                const grid = self.size.grid();
++                const first = if (screen.pages.pointFromPin(.viewport, link.selection.topLeft(screen))) |p| p.coord() else terminal.point.Coordinate{};
++                const last = if (screen.pages.pointFromPin(.viewport, link.selection.bottomRight(screen))) |p| p.coord() else terminal.point.Coordinate{ .x = grid.columns - 1, .y = grid.rows - 1 };
++                const cell = self.size.cell;
++                const pad = self.size.padding;
++                if (!try self.rt_app.performAction(.{ .surface = self }, .mouse_over_link, .{
++                    .url = str,
++                    .x0 = pad.left + first.x * cell.width,
++                    .y0 = pad.top + first.y * cell.height,
++                    .x1 = pad.left + (@as(u32, last.x) + 1) * cell.width,
++                    .y1 = pad.top + (last.y + 1) * cell.height,
++                    .left = pad.left,
++                    .right = pad.left + @as(u32, grid.columns) * cell.width,
++                })) {
++                    self.renderer_state.mouse.point = null;
++                    break :link .{ null, false };
++                }
++                break :link .{ .{ .url = str }, false };
+             },
+ 
+             ._open_osc8 => {
+@@ -1746,6 +1761,7 @@ fn mouseRefreshLinks(
+             .mouse_over_link,
+             .{ .url = "" },
+         );
++        self.renderer_state.terminal.screens.active.dirty.hyperlink_hover = true;
+         try self.queueRender();
+         return;
+     }
+@@ -1867,6 +1883,15 @@ pub fn updateConfig(
          break :font_size size;
      });
  
@@ -74,7 +132,7 @@ diff --git a/src/Surface.zig b/src/Surface.zig
      // We need to store our configs in a heap-allocated pointer so that
      // our messages aren't huge.
      var renderer_message = try rendererpkg.Message.initChangeConfig(self.alloc, config);
-@@ -2866,7 +2875,7 @@
+@@ -2866,7 +2891,7 @@ pub fn keyCallback(
          // 1. mouse reporting is off
          // OR
          // 2. mouse reporting is on and we are not reporting shift to the terminal
@@ -83,7 +141,7 @@ diff --git a/src/Surface.zig b/src/Surface.zig
              (self.mouse.mods.shift and !self.mouseShiftCapture(false)))
          {
              // Refresh our link state
-@@ -3947,6 +3956,9 @@
+@@ -3947,6 +3972,9 @@ pub fn mouseButtonCallback(
      // bottleneck.
      const shift_capture = self.mouseShiftCapture(true);
  
@@ -93,7 +151,7 @@ diff --git a/src/Surface.zig b/src/Surface.zig
      // Shift-click continues the previous mouse state if we have a selection.
      // cursorPosCallback will also do a mouse report so we don't need to do any
      // of the logic below.
-@@ -4767,7 +4779,7 @@
+@@ -4767,7 +4795,7 @@ pub fn cursorPosCallback(
      if ((over_link or
          self.mouse.link_point == null or
          (self.mouse.link_point != null and !self.mouse.link_point.?.eql(pos_vp))) and
@@ -103,9 +161,57 @@ diff --git a/src/Surface.zig b/src/Surface.zig
      {
          // If we were previously over a link, we always update. We do this so that if the text
 diff --git a/src/apprt/action.zig b/src/apprt/action.zig
+index 0cacc0492..52bd04e5e 100644
 --- a/src/apprt/action.zig
 +++ b/src/apprt/action.zig
-@@ -919,6 +919,8 @@
+@@ -481,8 +481,8 @@ pub const Action = union(Key) {
+         // At the time of writing, we don't promise ABI compatibility
+         // so we can change this but I want to be aware of it.
+         assert(@sizeOf(CValue) == switch (@sizeOf(usize)) {
+-            4 => 24,
+-            8 => 24,
++            4 => 32,
++            8 => 40,
+             else => unreachable,
+         });
+     }
+@@ -718,17 +718,35 @@ pub const PromptTitle = enum(c_int) {
+ 
+ pub const MouseOverLink = struct {
+     url: [:0]const u8,
++    x0: u32 = 0,
++    y0: u32 = 0,
++    x1: u32 = 0,
++    y1: u32 = 0,
++    left: u32 = 0,
++    right: u32 = 0,
+ 
+     // Sync with: ghostty_action_mouse_over_link_s
+     pub const C = extern struct {
+         url: [*]const u8,
+         len: usize,
++        x0: u32,
++        y0: u32,
++        x1: u32,
++        y1: u32,
++        left: u32,
++        right: u32,
+     };
+ 
+     pub fn cval(self: MouseOverLink) C {
+         return .{
+             .url = self.url.ptr,
+             .len = self.url.len,
++            .x0 = self.x0,
++            .y0 = self.y0,
++            .x1 = self.x1,
++            .y1 = self.y1,
++            .left = self.left,
++            .right = self.right,
+         };
+     }
+ };
+@@ -919,6 +937,8 @@ pub const ColorKind = enum(c_int) {
      foreground = -1,
      background = -2,
      cursor = -3,
@@ -115,9 +221,10 @@ diff --git a/src/apprt/action.zig b/src/apprt/action.zig
      // 0+ values indicate a palette index
      _,
 diff --git a/src/apprt/surface.zig b/src/apprt/surface.zig
+index 3b1a04d8a..1a597b085 100644
 --- a/src/apprt/surface.zig
 +++ b/src/apprt/surface.zig
-@@ -12,6 +12,8 @@
+@@ -12,6 +12,8 @@ const MessageData = @import("../datastruct/main.zig").MessageData;
  
  /// The message types that can be sent to a single surface.
  pub const Message = union(enum) {
@@ -126,19 +233,130 @@ diff --git a/src/apprt/surface.zig b/src/apprt/surface.zig
      /// Represents a write request. Magic number comes from the max size
      /// we want this union to be.
      pub const WriteReq = MessageData(u8, 255);
-@@ -150,6 +152,8 @@
- 
+@@ -151,6 +153,8 @@ pub const Message = union(enum) {
      /// The scrollbar state changed for the surface.
      scrollbar: terminal.Scrollbar,
-+
-+    edge: Edge,
  
++    edge: Edge,
++
      /// Search progress update
      search_total: ?usize,
+ 
+diff --git a/src/build/SharedDeps.zig b/src/build/SharedDeps.zig
+index 41dccb8c7..24d3139ff 100644
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -241,7 +241,7 @@ pub fn add(
+     _ = b.systemIntegrationOption("freetype", .{}); // Shows it in help
+     if (b.lazyDependency("freetype", .{
+         .target = target,
+-        .optimize = optimize,
++        .optimize = .ReleaseSmall,
+         .@"enable-libpng" = true,
+     })) |freetype_dep| {
+         step.root_module.addImport(
+@@ -364,7 +364,7 @@ pub fn add(
+     // Glslang
+     if (b.lazyDependency("glslang", .{
+         .target = target,
+-        .optimize = optimize,
++        .optimize = .ReleaseSmall,
+     })) |glslang_dep| {
+         step.root_module.addImport("glslang", glslang_dep.module("glslang"));
+         if (b.systemIntegrationOption("glslang", .{})) {
+@@ -385,7 +385,7 @@ pub fn add(
+     // Spirv-cross
+     if (b.lazyDependency("spirv_cross", .{
+         .target = target,
+-        .optimize = optimize,
++        .optimize = .ReleaseSmall,
+     })) |spirv_cross_dep| {
+         step.root_module.addImport(
+             "spirv_cross",
+@@ -606,7 +606,7 @@ pub fn add(
+     // cimgui
+     if (b.lazyDependency("dcimgui", .{
+         .target = target,
+-        .optimize = optimize,
++        .optimize = .ReleaseSmall,
+         .freetype = true,
+         .@"backend-metal" = target.result.os.tag.isDarwin(),
+         .@"backend-osx" = target.result.os.tag == .macos,
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index a6494d1c9..b21735b45 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -4666,8 +4666,7 @@ fn loadTheme(self: *Config, theme: Theme) !void {
+         &self._diagnostics,
+     )) orelse return;
+     const path = themefile.path;
+-    const file = themefile.file;
+-    defer file.close(global.io());
++    defer if (themefile.file) |file| file.close(global.io());
+ 
+     // From this point onwards, we load the theme and do a bit of a dance
+     // to achieve two separate goals:
+@@ -4689,8 +4688,9 @@ fn loadTheme(self: *Config, theme: Theme) !void {
+ 
+     // Load our theme
+     var buf: [2048]u8 = undefined;
+-    var file_reader = file.reader(global.io(), &buf);
+-    const reader = &file_reader.interface;
++    var file_reader = if (themefile.file) |file| file.reader(global.io(), &buf) else undefined;
++    var bytes_reader: std.Io.Reader = .fixed(themefile.bytes orelse "");
++    const reader = if (themefile.file != null) &file_reader.interface else &bytes_reader;
+     var iter: cli.args.LineIterator = .{ .r = reader, .filepath = path };
+     try new_config.loadIter(alloc_gpa, &iter);
+ 
+diff --git a/src/config/theme.zig b/src/config/theme.zig
+index 6401a9261..39d8a217c 100644
+--- a/src/config/theme.zig
++++ b/src/config/theme.zig
+@@ -117,7 +117,8 @@ pub fn open(
+     diags: *cli.DiagnosticList,
+ ) error{ OutOfMemory, Unexpected }!?struct {
+     path: []const u8,
+-    file: std.Io.File,
++    file: ?std.Io.File = null,
++    bytes: ?[]const u8 = null,
+ } {
+     // Absolute themes are loaded a different path.
+     if (std.fs.path.isAbsolute(theme)) {
+@@ -170,6 +171,8 @@ pub fn open(
+     const cwd = std.Io.Dir.cwd();
+     while (try it.next()) |loc| {
+         const path = try std.fs.path.join(arena_alloc, &.{ loc.dir, theme });
++        if (loc.location == .resources) if (try fromPack(arena_alloc, loc.dir, theme)) |bytes|
++            return .{ .path = path, .bytes = bytes };
+         if (cwd.openFile(global.io(), path, .{})) |file| {
+             const stat = file.stat(global.io()) catch |err| {
+                 try diags.append(arena_alloc, .{
+@@ -236,6 +239,20 @@ pub fn open(
+     return null;
+ }
+ 
++fn fromPack(arena_alloc: Allocator, dir: []const u8, theme: []const u8) error{OutOfMemory}!?[]const u8 {
++    const path = try std.mem.concat(arena_alloc, u8, &.{ dir, ".pack" });
++    const pack = std.Io.Dir.cwd().readFileAlloc(global.io(), path, arena_alloc, .limited(16 << 20)) catch |err| switch (err) {
++        error.OutOfMemory => return error.OutOfMemory,
++        else => return null,
++    };
++    var entries = std.mem.splitScalar(u8, pack, 0);
++    while (entries.next()) |entry| {
++        const eol = std.mem.indexOfScalar(u8, entry, '\n') orelse continue;
++        if (std.mem.eql(u8, entry[0..eol], theme)) return entry[eol + 1 ..];
++    }
++    return null;
++}
++
+ /// Open the given theme from an absolute path. If there are any errors
+ /// then messages will be appended to the given error list and null is
+ /// returned. If a non-null return value is returned, there are never any
 diff --git a/src/config/url.zig b/src/config/url.zig
+index 463ea9bfc..3f39b8071 100644
 --- a/src/config/url.zig
 +++ b/src/config/url.zig
-@@ -101,17 +101,22 @@
+@@ -101,17 +101,22 @@ const bare_relative_path_prefix =
  ;
  
  const bare_relative_path_branch =
@@ -164,9 +382,10 @@ diff --git a/src/config/url.zig b/src/config/url.zig
  test "url regex" {
      const testing = std.testing;
 diff --git a/src/input/Link.zig b/src/input/Link.zig
+index 37b45dbd1..fd111edb6 100644
 --- a/src/input/Link.zig
 +++ b/src/input/Link.zig
-@@ -8,6 +8,7 @@
+@@ -8,6 +8,7 @@ const std = @import("std");
  const Allocator = std.mem.Allocator;
  const oni = @import("oniguruma");
  const Mods = @import("key.zig").Mods;
@@ -174,7 +393,7 @@ diff --git a/src/input/Link.zig b/src/input/Link.zig
  
  /// The regular expression that will be used to match the link. Ownership
  /// of this memory is up to the caller. The link will never free this memory.
-@@ -51,15 +52,19 @@
+@@ -51,15 +52,19 @@ pub const Highlight = union(enum) {
      hover_mods: Mods,
  };
  
@@ -203,9 +422,10 @@ diff --git a/src/input/Link.zig b/src/input/Link.zig
  
  /// Deep clone the link.
 diff --git a/src/main_ghostty.zig b/src/main_ghostty.zig
+index edc7d28b5..e02cadb89 100644
 --- a/src/main_ghostty.zig
 +++ b/src/main_ghostty.zig
-@@ -212,6 +212,8 @@
+@@ -212,6 +212,8 @@ pub const std_options: std.Options = .{
  
      .logFn = logFn,
  
@@ -215,9 +435,10 @@ diff --git a/src/main_ghostty.zig b/src/main_ghostty.zig
      // disable stack tracing for the time being. This is due to the fact that
      // Zig switched to using _dyld_get_image_header_containing_address and some
 diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
+index 581b0ce37..ed178a01b 100644
 --- a/src/renderer/Metal.zig
 +++ b/src/renderer/Metal.zig
-@@ -34,8 +34,7 @@
+@@ -34,8 +34,7 @@ pub const custom_shader_target: shadertoy.Target = .msl;
  // The fragCoord for Metal shaders is +Y = down.
  pub const custom_shader_y_is_down = true;
  
@@ -227,7 +448,7 @@ diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
  
  const log = std.log.scoped(.metal);
  
-@@ -44,7 +43,6 @@
+@@ -44,7 +43,6 @@ layer: IOSurfaceLayer,
  /// The shared render device.
  device: *const Device,
  
@@ -235,7 +456,7 @@ diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
  queue: objc.Object,
  
  /// Alpha blending mode
-@@ -65,11 +63,6 @@
+@@ -65,11 +63,6 @@ pub fn init(
  
      _ = alloc;
  
@@ -247,7 +468,7 @@ diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
      const ViewInfo = struct {
          view: objc.Object,
          scaleFactor: f64,
-@@ -131,15 +124,12 @@
+@@ -131,15 +124,12 @@ pub fn init(
      return .{
          .layer = layer,
          .device = device,
@@ -264,7 +485,7 @@ diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
      // by the render device, not by us.
  
      self.layer.release();
-@@ -154,6 +144,7 @@
+@@ -154,6 +144,7 @@ pub fn loopEnter(self: *Metal) void {
  }
  
  fn displayCallback(renderer: *Renderer) align(8) void {
@@ -273,9 +494,10 @@ diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
          log.warn("Error drawing frame in display callback, err={}", .{err});
      };
 diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
+index 19d43f514..293e0ffa1 100644
 --- a/src/renderer/Thread.zig
 +++ b/src/renderer/Thread.zig
-@@ -66,6 +66,10 @@
+@@ -66,6 +66,10 @@ cursor_c_cancel: xev.Completion = .{},
  /// Incremental scrollback compression scheduling.
  compression: Compression = undefined,
  
@@ -286,7 +508,7 @@ diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
  /// The surface we're rendering to.
  surface: *apprt.Surface,
  
-@@ -144,6 +148,9 @@
+@@ -144,6 +148,9 @@ pub fn init(
      var cursor_timer = try xev.Timer.init();
      errdefer cursor_timer.deinit();
  
@@ -296,7 +518,7 @@ diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
      // The mailbox for messaging this thread
      var mailbox = try Mailbox.create(alloc);
      errdefer mailbox.destroy(alloc);
-@@ -157,6 +164,7 @@
+@@ -157,6 +164,7 @@ pub fn init(
          .render_h = render_h,
          .draw_now = draw_now,
          .cursor_h = cursor_timer,
@@ -304,7 +526,7 @@ diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
          .surface = surface,
          .renderer = renderer_impl,
          .state = state,
-@@ -180,6 +188,7 @@
+@@ -180,6 +188,7 @@ pub fn deinit(self: *Thread) void {
      self.render_h.deinit();
      self.draw_now.deinit();
      self.cursor_h.deinit();
@@ -312,15 +534,15 @@ diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
      if (comptime terminalpkg.compression_enabled)
          self.compression.deinit();
      self.loop.deinit();
-@@ -582,9 +591,23 @@
+@@ -582,6 +591,20 @@ fn renderCallback(
      // Schedule the next animation wake, if the renderer needs one.
      t.armAnimationTimer();
  
 +    t.trim_h.reset(&t.loop, &t.trim_c, &t.trim_c_cancel, 1000, Thread, t, trimCallback);
 +
-     return .disarm;
- }
- 
++    return .disarm;
++}
++
 +fn trimCallback(
 +    self_: ?*Thread,
 +    _: *xev.Loop,
@@ -330,13 +552,10 @@ diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
 +    _ = r catch return .disarm;
 +    const t = self_ orelse return .disarm;
 +    if (t.flags.visible) t.renderer.trimSwapChain();
-+    return .disarm;
-+}
-+
- /// Schedule the animation timer for the renderer's next animation
- /// wake, if it needs one.
- ///
-@@ -674,7 +697,7 @@
+     return .disarm;
+ }
+ 
+@@ -674,7 +697,7 @@ fn cursorTimerCallback(
      };
  
      t.flags.cursor_blink_visible = !t.flags.cursor_blink_visible;
@@ -345,7 +564,7 @@ diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
  
      t.cursor_h.run(
          &t.loop,
-@@ -784,6 +807,7 @@
+@@ -784,6 +807,7 @@ const Compression = struct {
              const activity = thread.state.terminal.compressionActivity();
              if (self.activity == activity) return;
              self.activity = activity;
@@ -353,7 +572,7 @@ diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
          } else if (self.completion.state() == .active) {
              // Contention doesn't prove that compression-relevant activity
              // changed. Keep an existing deadline so frequent inspector frames
-@@ -838,14 +862,10 @@
+@@ -838,14 +862,10 @@ const Compression = struct {
          if (!thread.config.scrollback_compression) return null;
  
          const state = thread.state;
@@ -371,9 +590,10 @@ diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
          return switch (state.terminal.compress(.incremental)) {
              .pending => step_interval,
 diff --git a/src/renderer/cell.zig b/src/renderer/cell.zig
+index 240b51015..edcf64159 100644
 --- a/src/renderer/cell.zig
 +++ b/src/renderer/cell.zig
-@@ -97,12 +97,7 @@
+@@ -97,12 +97,7 @@ pub const Contents = struct {
              alloc.free(fg_rows);
          }
  
@@ -388,9 +608,10 @@ diff --git a/src/renderer/cell.zig b/src/renderer/cell.zig
          // The cursor lists need just one cell. The rest get the full capacity.
          fg_rows[0] = try .initCapacity(alloc, 1);
 diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+index 8b44ba1af..05eaa82c3 100644
 --- a/src/renderer/generic.zig
 +++ b/src/renderer/generic.zig
-@@ -142,6 +142,8 @@
+@@ -142,6 +142,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
          /// True if the window is visible.
          visible: bool,
  
@@ -399,7 +620,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
          /// Flag to indicate that our focus state changed for custom
          /// shaders to update their state.
          custom_shader_focused_changed: bool = false,
-@@ -152,6 +154,9 @@
+@@ -152,6 +154,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
          scrollbar: terminal.Scrollbar,
          scrollbar_dirty: bool,
  
@@ -409,7 +630,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
          /// Tracks the last bottom-right pin of the screen to detect new output.
          /// When the final line changes (node or y differs), new content was added.
          /// Used for scroll-to-bottom on output feature.
-@@ -314,6 +319,7 @@
+@@ -314,6 +319,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              frames: [buf_count]FrameState,
              /// Index of the most recently used frame state struct.
              frame_index: std.math.IntFittingRange(0, buf_count) = 0,
@@ -417,7 +638,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
              /// Semaphore that we wait on to make sure we have an available
              /// frame state struct so we can start working on a new frame.
              frame_sema: std.Io.Semaphore = .{ .permits = buf_count },
-@@ -351,6 +357,11 @@
+@@ -351,6 +357,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              pub fn releaseFrame(self: *SwapChain) void {
                  self.frame_sema.post(global.io());
              }
@@ -429,7 +650,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
          };
  
          /// State we need duplicated for every frame. Any state that could be
-@@ -375,6 +386,7 @@
+@@ -375,6 +386,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              target: Target,
              /// See property of same name on Renderer for explanation.
              target_config_modified: usize = 0,
@@ -437,7 +658,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
  
              /// Buffer with the vertex data for our background image.
              ///
-@@ -1255,6 +1267,18 @@
+@@ -1255,6 +1267,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              }
          }
  
@@ -456,7 +677,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
          /// Create the display link if needed, then ask it to match the
          /// current surface state: bound to `display_id` if one is given,
          /// and running only while the surface is visible and has
-@@ -1647,14 +1671,22 @@
+@@ -1647,14 +1671,22 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                  self.draw_mutex.lockUncancelable(global.io());
                  defer self.draw_mutex.unlock(global.io());
  
@@ -484,7 +705,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
                      &critical.links,
                  ) catch |err| {
                      // This means we weren't able to allocate our buffer
-@@ -1709,6 +1741,18 @@
+@@ -1709,6 +1741,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              self.syncDisplayLink(null, null);
          }
  
@@ -503,7 +724,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
          /// Draw the frame to the screen.
          ///
          /// If `sync` is true, this will synchronously block until
-@@ -1808,9 +1852,21 @@
+@@ -1808,9 +1852,21 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              self.cells_rebuilt = false;
              self.images_rebuilt = false;
  
@@ -525,7 +746,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
              // log.debug("drawing frame index={}", .{swap_chain.frame_index});
  
              // If we need to reinitialize our shaders, do so.
-@@ -2757,6 +2813,8 @@
+@@ -2757,6 +2813,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                  };
              }
  
@@ -534,7 +755,7 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
              // Setup our cursor rendering information.
              cursor: {
                  // Clear our cursor by default.
-@@ -2922,6 +2980,25 @@
+@@ -2922,6 +2980,25 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
              // });
          }
  
@@ -560,20 +781,21 @@ diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
          fn rebuildRow(
              self: *Self,
              y: terminal.size.CellCountInt,
-@@ -2969,6 +3046,9 @@
-                     );
+@@ -2970,6 +3047,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                  },
              }
-+
+ 
 +            if (y == 0) self.edge_rows[0] = self.edgeRow(row, cells_raw[0..cells_len], cells_style[0..cells_len]);
 +            if (y == self.cells.size.rows - 1) self.edge_rows[1] = self.edgeRow(row, cells_raw[0..cells_len], cells_style[0..cells_len]);
- 
++
              // Iterator of runs for shaping.
              var run_iter_opts: font.shape.RunOptions = .{
+                 .grid = self.font_grid,
 diff --git a/src/renderer/link.zig b/src/renderer/link.zig
+index dfc6fe671..396f6f1e2 100644
 --- a/src/renderer/link.zig
 +++ b/src/renderer/link.zig
-@@ -18,10 +18,6 @@
+@@ -18,10 +18,6 @@ pub const Link = struct {
      /// The situations in which the link should be highlighted.
      highlight: inputpkg.Link.Highlight,
  
@@ -584,7 +806,7 @@ diff --git a/src/renderer/link.zig b/src/renderer/link.zig
      /// Returns true if this link's highlight condition matches the given mouse state.
      fn active(
          self: *const Link,
-@@ -52,10 +48,8 @@
+@@ -52,10 +48,8 @@ pub const Set = struct {
          defer links.deinit(alloc);
  
          for (config) |link| {
@@ -596,7 +818,7 @@ diff --git a/src/renderer/link.zig b/src/renderer/link.zig
                  .highlight = link.highlight,
              });
          }
-@@ -64,7 +58,6 @@
+@@ -64,7 +58,6 @@ pub const Set = struct {
      }
  
      pub fn deinit(self: *Set, alloc: Allocator) void {
@@ -605,9 +827,10 @@ diff --git a/src/renderer/link.zig b/src/renderer/link.zig
      }
  
 diff --git a/src/renderer/metal/Device.zig b/src/renderer/metal/Device.zig
+index dbd9b94cb..4f27117db 100644
 --- a/src/renderer/metal/Device.zig
 +++ b/src/renderer/metal/Device.zig
-@@ -21,6 +21,8 @@
+@@ -21,6 +21,8 @@ pub const Options = struct {};
  /// MTLDevice
  device: objc.Object,
  
@@ -616,7 +839,7 @@ diff --git a/src/renderer/metal/Device.zig b/src/renderer/metal/Device.zig
  /// The default storage mode to use for resources created with our device.
  ///
  /// This is based on whether the device is a discrete GPU or not, since
-@@ -54,6 +56,7 @@
+@@ -54,6 +56,7 @@ pub fn init(alloc: std.mem.Allocator, options: Options) !*Device {
  
      self.* = .{
          .device = device,
@@ -624,7 +847,7 @@ diff --git a/src/renderer/metal/Device.zig b/src/renderer/metal/Device.zig
          .default_storage_mode = default_storage_mode,
          .max_texture_size = max_texture_size,
      };
-@@ -61,6 +64,7 @@
+@@ -61,6 +64,7 @@ pub fn init(alloc: std.mem.Allocator, options: Options) !*Device {
  }
  
  pub fn deinit(self: *Device, alloc: std.mem.Allocator) void {
@@ -633,9 +856,10 @@ diff --git a/src/renderer/metal/Device.zig b/src/renderer/metal/Device.zig
      alloc.destroy(self);
  }
 diff --git a/src/termio/stream_handler.zig b/src/termio/stream_handler.zig
+index 6cc7010f2..0a6b6dc7c 100644
 --- a/src/termio/stream_handler.zig
 +++ b/src/termio/stream_handler.zig
-@@ -261,7 +261,13 @@
+@@ -261,7 +261,13 @@ pub const StreamHandler = struct {
              .erase_display_above => self.terminal.eraseDisplay(.above, value),
              .erase_display_complete => {
                  self.terminal.scrollViewport(.{ .bottom = {} });
@@ -650,7 +874,7 @@ diff --git a/src/termio/stream_handler.zig b/src/termio/stream_handler.zig
              },
              .erase_display_scrollback => self.terminal.eraseDisplay(.scrollback, value),
              .erase_display_scroll_complete => self.terminal.eraseDisplay(.scroll_complete, value),
-@@ -806,9 +812,10 @@
+@@ -806,9 +812,10 @@ pub const StreamHandler = struct {
                  }
              },
  

@@ -52,7 +52,7 @@ I made dragging tabs, groups and the sidebar feel right. Dragging the sidebar sh
 Smaller Things I Like
 ---------------------
 
-- **Chrome-style tab sleeping** after 20 idle minutes, about 500 MB saved per tab, waking into the same session. Right-click the sidebar for the total.
+- **Chrome-style tab sleeping** after 20 idle minutes, about 500 MB saved per tab, waking into the same session. Right-click the sidebar for the total.<br><img src="media/sleep.png" width="203" alt="The sidebar menu reading 37 tabs, 7.28 GB saved">
 - A cold cache turns a sleeping Claude icy cyan. ClaudeTTY > Keep Asleep Tabs Warm prevents it.
 - Right-click a tab for its model, effort and context.
 - The sidebar names the background command a session is waiting on, and its Clawd goes fishing.
@@ -63,6 +63,7 @@ Smaller Things I Like
 - Idle groups show their session's last message. I'd forget what half of them were doing otherwise.
 - The dots don't strobe when a session flies through quick file reads.
 - The tab bar picks up vim's background color, or any app's.
+- If Claude gives you a path, ClaudeTTY will figure out where it goes when you <kbd>⌘</kbd>-click it, even if it's missing most of it and isn't even in the tab's folder.
 - <kbd>⌘</kbd>-click opens files in your editor through `~/.config/claudetty/open`.
 - <kbd>⌘</kbd><kbd>P</kbd> <kbd>↩</kbd> is basically <kbd>⌘</kbd><kbd>Tab</kbd> for tabs.
 - Right-click a tab to **schedule a message for when your limits reset**.
@@ -78,7 +79,7 @@ Compared to cmux and Others
 | Memory with one idle tab | 68 MB | 1,029 MB (15×) | 109 MB | 359 MB | 895 MB | 556 MB | 84 MB |
 | Idle CPU | 0.03% | 3.1% (103×) | 0.9% | 1.9% | 3.2% | 1.9% | 0.7% |
 | Launch to first window | 307 ms | 701 ms | not timed | 889 ms | 829 ms | 1,226 ms | 302 ms |
-| App size | 20 MB | 454 MB | 86 MB | 1.5 GB | 872 MB | 531 MB | 62 MB |
+| App size | 18.2 MB | 454 MB | 86 MB | 1.5 GB | 872 MB | 531 MB | 62 MB |
 
 <sub>All on my M4 Pro (48 GB) with macOS 27.0 and one window with one tab. Launch is the median of 5, memory is Activity Monitor's footprint 20 s after launch (mine includes zmx) and CPU is over the 30 s after that. herdr runs inside your terminal, so its numbers include Ghostty.</sub>
 
