@@ -1,11 +1,62 @@
 zmx #294: Daemon.deinit freed socket_path, which the caller allocated before the fork with another allocator (Daemon.init: "Caller is responsible for freeing all variables passed into the init fn"); every session exit aborted in libmalloc.
 The daemon compresses its scrollback once output rests a second, as the app's renderer does (Terminal.compress): zmx never called it, so a long-scrollback tab's daemon kept every page resident.
-A command naming a session a zmx 0.8 daemon serves fails at once (refuseOld): 0.8 frames its header as a packed { tag, len: u32 }, so it reads our protocol version byte as a payload length and never answers. An app built for 0.8 that an update swapped to this binary called `zmx history` on its main thread and froze (1.2.3 to 1.2.4).
+A session a zmx 0.8 daemon serves (ClaudeTTY 1.2.3 and older made it) is reached in its frames (ipc.legacy): 0.8 frames its header as a packed { tag, len: u32 } in the same 8 bytes, so it reads our protocol version byte as a payload length and never answers ours; every payload a ClaudeTTY command sends is already 0.8's. `zmx list` probes it again in its frames and marks it zmx=0.8.
 diff --git a/src/ipc.zig b/src/ipc.zig
-index ad05c2b..5f785d7 100644
+index ad05c2b..5cb0c64 100644
 --- a/src/ipc.zig
 +++ b/src/ipc.zig
-@@ -254,6 +254,18 @@ pub fn connectSession(socket_path: []const u8) ConnectError!i32 {
+@@ -118,13 +118,18 @@ pub const Info = extern struct {
+     _reserved: [6]u8 = @splat(0),
+ };
+ 
++pub var legacy = false;
++
++fn headerBytes(tag: Tag, len: usize) [@sizeOf(Header)]u8 {
++    if (!legacy) return std.mem.toBytes(Header{ .tag = tag, .len = @intCast(len) });
++    var bytes = std.mem.zeroes([@sizeOf(Header)]u8);
++    bytes[0] = @backingInt(tag);
++    std.mem.writeInt(u32, bytes[1..5], @intCast(len), .little);
++    return bytes;
++}
++
+ pub fn send(fd: i32, tag: Tag, data: []const u8) !void {
+-    const header = Header{
+-        .tag = tag,
+-        .len = @intCast(data.len),
+-    };
+-    const header_bytes = std.mem.asBytes(&header);
+-    try writeAll(fd, header_bytes);
++    try writeAll(fd, &headerBytes(tag, data.len));
+     if (data.len > 0) {
+         try writeAll(fd, data);
+     }
+@@ -136,14 +141,10 @@ pub fn appendMessage(
+     tag: Tag,
+     data: []const u8,
+ ) !void {
+-    const header = Header{
+-        .tag = tag,
+-        .len = @intCast(data.len),
+-    };
+     // Guarantee capacity for header + payload in one check to avoid
+     // intermediate realloc between the two appends on the hot path.
+     try list.ensureTotalCapacity(gpa, list.items.len + @sizeOf(Header) + data.len);
+-    list.appendSliceAssumeCapacity(std.mem.asBytes(&header));
++    list.appendSliceAssumeCapacity(&headerBytes(tag, data.len));
+     if (data.len > 0) {
+         list.appendSliceAssumeCapacity(data);
+     }
+@@ -222,7 +223,8 @@ pub const SocketBuffer = struct {
+         const available = self.buf.items[self.head..];
+         if (available.len < @sizeOf(Header)) return null;
+ 
+-        const hdr = std.mem.bytesToValue(Header, available[0..@sizeOf(Header)]);
++        var hdr = std.mem.bytesToValue(Header, available[0..@sizeOf(Header)]);
++        if (legacy) hdr = .{ .tag = @enumFromInt(available[0]), .len = std.mem.readInt(u32, available[1..5], .little) };
+         if (hdr.len > MAX_PAYLOAD_LEN or hdr.protocol_version != PROTOCOL_VERSION) {
+             // framing error / corrupted stream: clear buffer to avoid
+             // infinite alloc
+@@ -254,15 +256,28 @@ pub fn connectSession(socket_path: []const u8) ConnectError!i32 {
      };
  }
  
@@ -24,6 +75,25 @@ index ad05c2b..5f785d7 100644
  const SessionProbeError = error{
      Timeout,
      ConnectionRefused,
+     Unexpected,
+     InfoSizeMismatch,
+     Unsupported,
++    OldProtocol,
+ };
+ 
+-const SessionProbeResult = struct {
++pub const SessionProbeResult = struct {
+     fd: i32,
+     info: Info,
+     labels: ?[]const u8,
+@@ -296,6 +311,7 @@ pub fn probeSession(
+ 
+     const n = sb.read(fd) catch return error.Unexpected;
+     if (n == 0) return error.Unexpected;
++    if (!legacy and sb.buf.items.len > 1 and sb.buf.items[1] != PROTOCOL_VERSION) return error.OldProtocol;
+ 
+     var info_result: ?Info = null;
+     var labels: ?[]const u8 = null;
 diff --git a/src/loop.zig b/src/loop.zig
 index f5d6708..53856e6 100644
 --- a/src/loop.zig
@@ -78,15 +148,15 @@ index f5d6708..53856e6 100644
          .pid = 0,
          .created_at = 0,
 diff --git a/src/main.zig b/src/main.zig
-index 183b736..d1c4c8b 100644
+index 183b736..70eee99 100644
 --- a/src/main.zig
 +++ b/src/main.zig
-@@ -31,6 +31,23 @@ fn printError(io: std.Io, comptime fmt: []const u8, args: anytype) noreturn {
+@@ -31,6 +31,22 @@ fn printError(io: std.Io, comptime fmt: []const u8, args: anytype) noreturn {
      w.interface.flush() catch {};
      std.process.exit(1);
  }
 +
-+fn refuseOld(gpa: std.mem.Allocator, io: std.Io, cfg: *Cfg, args: std.process.Args) !void {
++fn reachOld(gpa: std.mem.Allocator, cfg: *Cfg, args: std.process.Args) !void {
 +    const argv = try args.toSlice(gpa);
 +    defer gpa.free(argv);
 +    var i: usize = 2;
@@ -98,18 +168,72 @@ index 183b736..d1c4c8b 100644
 +    defer gpa.free(sesh);
 +    const socket_path = socket.getSocketPath(gpa, cfg.socket_dir, sesh) catch return;
 +    defer gpa.free(socket_path);
-+    if (!ipc.oldProtocol(socket_path)) return;
-+    printError(io, "session \"{s}\" runs zmx 0.8, which ClaudeTTY no longer reaches", .{argv[i]});
++    ipc.legacy = ipc.oldProtocol(socket_path);
 +}
 +
  pub fn main(init: std.process.Init) !void {
      mainImpl(init) catch |err| switch (err) {
          error.Sighup => signal.reraise(.HUP),
-@@ -56,6 +73,7 @@ fn mainImpl(init: std.process.Init) !void {
+@@ -56,6 +72,7 @@ fn mainImpl(init: std.process.Init) !void {
  
      var cfg = try Cfg.init(gpa, io);
      defer cfg.deinit(gpa);
-+    try refuseOld(gpa, io, &cfg, init.minimal.args);
++    try reachOld(gpa, &cfg, init.minimal.args);
  
      const log_path = try std.fs.path.join(gpa, &.{ cfg.log_dir, "zmx.log" });
      defer gpa.free(log_path);
+diff --git a/src/util.zig b/src/util.zig
+index d036f13..1ff7869 100644
+--- a/src/util.zig
++++ b/src/util.zig
+@@ -22,6 +22,7 @@ pub const SessionEntry = struct {
+     cmd: ?[]const u8 = null,
+     cwd: ?[]const u8 = null,
+     labels: ?[]const u8 = null,
++    old: bool = false,
+     created_at: u64,
+     task_ended_at: ?u64,
+     task_exit_code: ?u8,
+@@ -38,6 +39,16 @@ pub const SessionEntry = struct {
+     }
+ };
+ 
++fn probeOld(alloc: std.mem.Allocator, socket_path: []const u8, old: *bool) !ipc.SessionProbeResult {
++    return ipc.probeSession(alloc, socket_path) catch |err| {
++        if (err != error.OldProtocol) return err;
++        old.* = true;
++        ipc.legacy = true;
++        defer ipc.legacy = false;
++        return ipc.probeSession(alloc, socket_path);
++    };
++}
++
+ pub fn get_session_entries(
+     alloc: std.mem.Allocator,
+     io: std.Io,
+@@ -61,7 +72,8 @@ pub fn get_session_entries(
+             };
+             defer alloc.free(socket_path);
+ 
+-            const result = ipc.probeSession(alloc, socket_path) catch |err| {
++            var old = false;
++            const result = probeOld(alloc, socket_path, &old) catch |err| {
+                 try sessions.append(alloc, .{
+                     .name = name,
+                     .pid = null,
+@@ -111,6 +123,7 @@ pub fn get_session_entries(
+                 .cmd = cmd,
+                 .cwd = cwd,
+                 .labels = labels,
++                .old = old,
+                 .created_at = result.info.created_at,
+                 .task_ended_at = result.info.task_ended_at,
+                 .task_exit_code = result.info.task_exit_code,
+@@ -783,6 +796,7 @@ pub fn writeSessionLine(
+             }
+         }
+     }
++    if (session.old) try writer.print("\tzmx=0.8", .{});
+     if (session.labels) |labels| {
+         var kvs = label.LabelIterator.init(labels);
+         while (kvs.next()) |kv| {

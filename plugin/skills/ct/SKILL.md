@@ -37,4 +37,4 @@ A tab opens in the folder `ct` runs from, so a task gets its own worktree and Cl
 git worktree add ../fix-login && cd ../fix-login && ct tasks fix-login claude
 ```
 
-zmx is linked beside `ct` (`~/.local/bin`). A session `zmx list` shows `status=unreachable` that zmx 0.8 made (ClaudeTTY 1.2.3 and older) can't be reached: zmx refuses it. A group named `list`, `events`, `wait`, `focus`, `split`, `notify`, `prompt`, `restart`, `reload` or `help`, or starting with `-`, can't be opened with `ct`, nor a tab named `logs` (zmx's own folder). Rename in the app: a zmx label set from outside doesn't reach the running app.
+zmx is linked beside `ct` (`~/.local/bin`). A session `zmx list` marks `zmx=0.8` was made by ClaudeTTY 1.2.3 or older: zmx reaches it as any other, and the app restarts it once on zmx 1.0 when it's idle. A group named `list`, `events`, `wait`, `focus`, `split`, `notify`, `prompt`, `restart`, `reload` or `help`, or starting with `-`, can't be opened with `ct`, nor a tab named `logs` (zmx's own folder). Rename in the app: a zmx label set from outside doesn't reach the running app.

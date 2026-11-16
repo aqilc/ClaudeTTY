@@ -29,6 +29,7 @@ struct Tab: Equatable, Codable {
     var labels: [String: String] = [:]
     var pid: Int32?
     var ended: Int32?
+    var old = false
 
     static func == (lhs: Tab, rhs: Tab) -> Bool { lhs.name == rhs.name }
 
@@ -1292,7 +1293,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let gone = tabs.filter { $0.pid != nil && !FileManager.default.fileExists(atPath: zmxDir + "/" + $0.name) }
         tabs.removeAll { tab in surfaces[tab.name] == nil && gone.contains(tab) }
         closed(gone.map(\.name))
-        for i in tabs.indices { if let found = live.first(where: { $0 == tabs[i] }), let pid = found.pid, pid != tabs[i].ended { tabs[i].pid = pid } }
+        for i in tabs.indices { if let found = live.first(where: { $0 == tabs[i] }), let pid = found.pid, pid != tabs[i].ended { (tabs[i].pid, tabs[i].old) = (pid, found.old) } }
         tabs += live.filter { !tabs.contains($0) && FileManager.default.fileExists(atPath: zmxDir + "/" + $0.name) }
         for group in groups where tabs.first(where: { $0.group == group })?.labels["named"] == nil { label(group, "named", named(group) ? "1" : "0") }
         selected = selected.flatMap { old in tabs.first { $0 == old } }
@@ -4184,7 +4185,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         lazy var store = Self.warmStore()
         for tab in tabs where tab.name != keyed && tab.claude == "idle" && tab.listed.isEmpty {
             guard let session = tab.session, let shell = tab.pid, let front = foreground(shell), let link = started(front)?.strings.first, FileManager.default.fileExists(atPath: link),
-                  URL(fileURLWithPath: link).resolvingSymlinksInPath() != URL(fileURLWithPath: binary(front)).resolvingSymlinksInPath()
+                  tab.old || URL(fileURLWithPath: link).resolvingSymlinksInPath() != URL(fileURLWithPath: binary(front)).resolvingSymlinksInPath()
                   || tab.name != selected?.name && Self.footprint(front, deep: false) > bloated || Share.stale(front), emptyPrompt(tab.name),
                   !(Self.resume(tab, session).isEmpty && Self.prompted(Self.arguments(front))),
                   tab.reply == nil || !cold(tab, store) else { continue }
@@ -4192,7 +4193,17 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [unowned self] in resumeUpdatedClaude() }
             return restart(tab, session: session, shell: shell, front: front, draft: "")
         }
+        for tab in tabs where tab.old && tab.name != keyed && tab.claude == nil {
+            guard let shell = tab.pid, foreground(shell) == shell, Self.children(shell).isEmpty, Self.shells.contains(binary(shell)) else { continue }
+            nextResume = Date() + 5
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [unowned self] in resumeUpdatedClaude() }
+            let history = Self.zmxOutput("history", tab.name, "--vt").flatMap { all in all.lastIndex(of: 10).map { all.prefix(through: $0) } }
+            var kept = tab
+            kept.labels["replay"] = history.map { _ in "1" }
+            return replace(kept, shell: shell, command: history.map(Self.replay) ?? [])
+        }
     }
+    private static let shells = Set(((try? String(contentsOfFile: "/etc/shells", encoding: .utf8)) ?? "").split(separator: "\n").map(String.init))
 
     private static func replay(_ history: Data) -> [String] {
         let path = NSTemporaryDirectory() + "claudetty-" + UUID().uuidString
@@ -4211,7 +4222,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func restart(_ tab: Tab, session: String, shell: Int32, front: Int32, draft: String) {
         let words = Self.arguments(front), name = tab.name
         let args = Self.flags(words) + Self.resume(tab, session)
-        guard front == shell else {
+        guard front == shell || tab.old else {
             Self.onExit(front) { [unowned self] in
                 let env = UserDefaults.standard.bool(forKey: Self.classicKey) ? "env -u CLAUDE_CODE_NO_FLICKER " : "env CLAUDE_CODE_NO_FLICKER=1 "
                 _ = try? Process.run(URL(fileURLWithPath: zmx), arguments: ["send", name, env + Self.quoted(words[0]) + " " + args + "\r"])
@@ -4414,7 +4425,7 @@ final class ClaudeTTY: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             guard let name = fields["name"], let group = fields["group"] else { return nil }
             var labels = fields.filter { ["color", "pinned", "groupawake", "order", "split", "pane", "title", "rank", "notify", "awake", "named", "replay", "folder", "folderpinned", "folderorder", "foldercolor", "readonly", "pr", "profile"].contains($0.key) }.mapValues(decoded)
             labels["folder"] = fields["folder"].map(read)?.uppercased()
-            return (Int(fields["created"] ?? "") ?? 0, Tab(name: name, group: read(group), cwd: URL(string: fields["cwd"] ?? "")?.path ?? NSHomeDirectory(), labels: labels, pid: fields["pid"].flatMap(Int32.init), topic: try? String(contentsOfFile: statusDir + "/" + name + ".topic", encoding: .utf8)))
+            return (Int(fields["created"] ?? "") ?? 0, Tab(name: name, group: read(group), cwd: URL(string: fields["cwd"] ?? "")?.path ?? NSHomeDirectory(), labels: labels, pid: fields["pid"].flatMap(Int32.init), old: fields["zmx"] == "0.8", topic: try? String(contentsOfFile: statusDir + "/" + name + ".topic", encoding: .utf8)))
         }.sorted { $0.0 < $1.0 }.map(\.1)
         let first = Dictionary(found.enumerated().map { ($1.group, $0) }, uniquingKeysWith: { first, _ in first })
         return found.map { (first[$0.group]!, Int($0.labels["rank"] ?? "") ?? .max, $0) }.sorted { ($0.0, $0.1) < ($1.0, $1.1) }.map(\.2)

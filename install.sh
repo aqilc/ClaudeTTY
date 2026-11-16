@@ -30,7 +30,7 @@ M=$APP.new/Contents/Resources/plugin; mkdir -p $M/.claude-plugin; cp -R plugin $
 print '{"name":"claudetty","owner":{"name":"ClaudeTTY"},"plugins":[{"name":"claudetty","source":"./claudetty"}]}' > $M/.claude-plugin/marketplace.json
 plutil -replace version -string $(cd plugin && find . -type f | sort | xargs cat | shasum | cut -c1-12) $M/claudetty/.claude-plugin/plugin.json
 P=$APP.new/Contents/Info.plist; plutil -create xml1 $P
-for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.5 CFBundleVersion 21 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
+for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.5.1 CFBundleVersion 22 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
 [[ -n ${CLAUDETTY_RELEASE-} ]] || plutil -insert ClaudeTTYSource -string $PWD $P
 plutil -insert NSServices -json '[{"NSMenuItem":{"default":"New ClaudeTTY Tab Here"},"NSMessage":"newTabHere","NSPortName":"ClaudeTTY","NSSendFileTypes":["public.folder"],"NSUserData":"shell"},{"NSMenuItem":{"default":"New Claude Tab Here"},"NSMessage":"newTabHere","NSPortName":"ClaudeTTY","NSSendFileTypes":["public.folder"],"NSUserData":"claude"}]' $P
 plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"ct","CFBundleURLSchemes":["ct"]}]' $P
