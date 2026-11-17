@@ -71,15 +71,15 @@ Smaller Things I Like
 Compared to cmux and Others
 ---------------------------
 
-| | ClaudeTTY | cmux | herdr | Superset | Warp | Wave | Ghostty |
+| | ClaudeTTY | cmux | herdr | Superset | Warp | Rex | Ghostty |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Tabs keep running after a quit or crash | ✅ | only through tmux | until its server restarts | ✅ | ❌ | SSH only, opt-in | ❌ |
-| Shows what each session is doing | ✅ | a needs-attention ring | working and blocked | working and done | with its plugin | ❌ | ❌ |
-| Claude can run other tabs | ✅ | CLI and socket | CLI and socket | CLI, MCP and SDK | ❌ | `wsh` CLI | ❌ |
-| Memory with one idle tab | 68 MB | 1,029 MB (15×) | 109 MB | 359 MB | 895 MB | 556 MB | 84 MB |
-| Idle CPU | 0.03% | 3.1% (103×) | 0.9% | 1.9% | 3.2% | 1.9% | 0.7% |
-| Launch to first window | 307 ms | 701 ms | not timed | 889 ms | 829 ms | 1,226 ms | 302 ms |
-| App size | 18.2 MB | 454 MB | 86 MB | 1.5 GB | 872 MB | 531 MB | 62 MB |
+| Tabs keep running after a quit or crash | ✅ | only through tmux | until its server restarts | ✅ | ❌ | until its server restarts | ❌ |
+| Shows what each session is doing | ✅ | a needs-attention ring | working and blocked | working and done | with its plugin | working, blocked and done | ❌ |
+| Claude can run other tabs | ✅ | CLI and socket | CLI and socket | CLI, MCP and SDK | ❌ | CLI and socket | ❌ |
+| Memory with one idle tab | 68 MB | 1,029 MB (15×) | 109 MB | 359 MB | 895 MB | ? | 84 MB |
+| Idle CPU | 0.03% | 3.1% (103×) | 0.9% | 1.9% | 3.2% | ? | 0.7% |
+| Launch to first window | 307 ms | 701 ms | not timed | 889 ms | 829 ms | ? | 302 ms |
+| App size | 18.2 MB | 454 MB | 86 MB | 1.5 GB | 872 MB | ? | 62 MB |
 
 <sub>All on my M4 Pro (48 GB) with macOS 27.0 and one window with one tab. Launch is the median of 5, memory is Activity Monitor's footprint 20 s after launch (mine includes zmx) and CPU is over the 30 s after that. herdr runs inside your terminal, so its numbers include Ghostty.</sub>
 
