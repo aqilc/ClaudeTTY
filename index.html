@@ -672,7 +672,7 @@ const metrics = [
   { note: "Activity Monitor's footprint 20 s after launch. Mine includes the zmx process holding the tab.", values: [68, 84, 109, 359, 895, 1029, '?'], show: v => v.toLocaleString('en-US') + ' MB' },
   { note: 'Average CPU from 20 to 50 s after launch.', values: [0.03, 0.7, 0.9, 1.9, 3.2, 3.1, '?'], show: v => v + '%' },
   { note: 'Launch to first window, median of 5.', values: [307, 302, null, 889, 829, 701, '?'], show: v => v.toLocaleString('en-US') + ' ms' },
-  { note: 'The whole app on disk.', values: [20, 62, 86, 1500, 872, 454, '?'], show: v => v < 1000 ? v + ' MB' : v / 1000 + ' GB' },
+  { note: 'The whole app on disk.', values: [18.2, 62, 86, 1500, 872, 454, '?'], show: v => v < 1000 ? v + ' MB' : v / 1000 + ' GB' },
 ];
 const metricButtons = document.querySelectorAll('.metric button');
 metricButtons.forEach((button, m) => button.addEventListener('click', () => {
