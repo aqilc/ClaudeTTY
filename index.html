@@ -513,7 +513,6 @@
     <span>Superset</span><div><i style="width:27.2%"></i>359 MB <small>5×</small></div>
     <span>Warp</span><div><i style="width:67.9%"></i>895 MB <small>13×</small></div>
     <span>cmux</span><div><i style="width:78%"></i>1,029 MB <small>15×</small></div>
-    <span>Rex</span><div><i style="width:0;min-width:0"></i>?</div>
   </div>
   <div class="stats">
     <div><b>15×</b><span>less memory than cmux</span></div>
@@ -667,12 +666,12 @@ addEventListener('resize', pick);
 pick();
 
 const bars = document.querySelector('.bars');
-// site-7: the README's numbers, apps in the bars' order (ClaudeTTY, Ghostty, herdr, Superset, Warp, cmux, Rex); herdr's launch was never timed, Rex has no public build to measure
+// site-7: the README's numbers, apps in the bars' order (ClaudeTTY, Ghostty, herdr, Superset, Warp, cmux); herdr's launch was never timed
 const metrics = [
-  { note: "Activity Monitor's footprint 20 s after launch. Mine includes the zmx process holding the tab.", values: [68, 84, 109, 359, 895, 1029, '?'], show: v => v.toLocaleString('en-US') + ' MB' },
-  { note: 'Average CPU from 20 to 50 s after launch.', values: [0.03, 0.7, 0.9, 1.9, 3.2, 3.1, '?'], show: v => v + '%' },
-  { note: 'Launch to first window, median of 5.', values: [307, 302, null, 889, 829, 701, '?'], show: v => v.toLocaleString('en-US') + ' ms' },
-  { note: 'The whole app on disk.', values: [18.2, 62, 86, 1500, 872, 454, '?'], show: v => v < 1000 ? v + ' MB' : v / 1000 + ' GB' },
+  { note: "Activity Monitor's footprint 20 s after launch. Mine includes the zmx process holding the tab.", values: [68, 84, 109, 359, 895, 1029], show: v => v.toLocaleString('en-US') + ' MB' },
+  { note: 'Average CPU from 20 to 50 s after launch.', values: [0.03, 0.7, 0.9, 1.9, 3.2, 3.1], show: v => v + '%' },
+  { note: 'Launch to first window, median of 5.', values: [307, 302, null, 889, 829, 701], show: v => v.toLocaleString('en-US') + ' ms' },
+  { note: 'The whole app on disk.', values: [18.2, 62, 86, 1500, 872, 454], show: v => v < 1000 ? v + ' MB' : v / 1000 + ' GB' },
 ];
 const metricButtons = document.querySelectorAll('.metric button');
 metricButtons.forEach((button, m) => button.addEventListener('click', () => {
@@ -685,7 +684,7 @@ metricButtons.forEach((button, m) => button.addEventListener('click', () => {
     bar.style.width = measured ? `calc(${v / max} * (100% - 8.5em))` : '0';
     bar.style.minWidth = measured ? '' : '0';
     while (bar.nextSibling) bar.nextSibling.remove();   // replacing the bar too would restart it without its transition
-    row.insertAdjacentHTML('beforeend', (v == null ? '<small>not timed</small>' : measured ? show(v) : v) + (i == 2 && v != null ? ' <small>in Ghostty</small>' : times >= 2 ? ` <small>${times}×</small>` : ''));
+    row.insertAdjacentHTML('beforeend', (measured ? show(v) : '<small>not timed</small>') + (i == 2 && v != null ? ' <small>in Ghostty</small>' : times >= 2 ? ` <small>${times}×</small>` : ''));
   });
 }));
 metricButtons[0].click();
