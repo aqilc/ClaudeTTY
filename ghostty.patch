@@ -435,7 +435,7 @@ index edc7d28b5..e02cadb89 100644
      // disable stack tracing for the time being. This is due to the fact that
      // Zig switched to using _dyld_get_image_header_containing_address and some
 diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
-index 581b0ce37..ed178a01b 100644
+index 581b0ce37..421f8b9ed 100644
 --- a/src/renderer/Metal.zig
 +++ b/src/renderer/Metal.zig
 @@ -34,8 +34,7 @@ pub const custom_shader_target: shadertoy.Target = .msl;
@@ -493,6 +493,17 @@ index 581b0ce37..ed178a01b 100644
      renderer.drawFrame(true) catch |err| {
          log.warn("Error drawing frame in display callback, err={}", .{err});
      };
+@@ -216,6 +207,10 @@ pub fn surfaceSize(self: *const Metal) !struct { width: u32, height: u32 } {
+     };
+ }
+ 
++pub fn showing(self: *const Metal, target: Target) bool {
++    return self.layer.layer.getProperty(?*anyopaque, "contents") == @as(?*anyopaque, @ptrCast(target.surface));
++}
++
+ /// Initialize a new render target which can be presented by this API.
+ pub fn initTarget(self: *const Metal, width: usize, height: usize) !Target {
+     return Target.init(.{
 diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
 index 19d43f514..293e0ffa1 100644
 --- a/src/renderer/Thread.zig
@@ -608,7 +619,7 @@ index 240b51015..edcf64159 100644
          // The cursor lists need just one cell. The rest get the full capacity.
          fg_rows[0] = try .initCapacity(alloc, 1);
 diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
-index 8b44ba1af..05eaa82c3 100644
+index 8b44ba1af..502ef16db 100644
 --- a/src/renderer/generic.zig
 +++ b/src/renderer/generic.zig
 @@ -142,6 +142,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
@@ -668,7 +679,7 @@ index 8b44ba1af..05eaa82c3 100644
 +            const sc = if (self.swap_chain) |*sc| sc else return;
 +            sc.waitIdle();
 +            for (&sc.frames, 0..) |*frame, i| {
-+                if (i == sc.presented or frame.target.width <= 1) continue;
++                if (i == sc.presented or frame.target.width <= 1 or self.api.showing(frame.target)) continue;
 +                frame.resize(self.api, 1, 1) catch continue;
 +                frame.content_hash = 0;
 +            }

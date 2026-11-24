@@ -99,6 +99,21 @@ final class SurfaceView: NSView, NSTextInputClient {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: settle!)
     }
 
+    var picture: IOSurfaceRef? {
+        guard let contents = layer?.contents, CFGetTypeID(contents as CFTypeRef) == IOSurfaceGetTypeID() else { return nil }
+        let surface = contents as! IOSurfaceRef, row = IOSurfaceGetBytesPerRow(surface), height = IOSurfaceGetHeight(surface)
+        guard let copy = IOSurfaceCreate([kIOSurfaceWidth: IOSurfaceGetWidth(surface), kIOSurfaceHeight: height, kIOSurfaceBytesPerRow: row,
+                                          kIOSurfaceBytesPerElement: IOSurfaceGetBytesPerElement(surface), kIOSurfacePixelFormat: IOSurfaceGetPixelFormat(surface)] as CFDictionary),
+              IOSurfaceGetBytesPerRow(copy) == row else { return nil }
+        IOSurfaceCopyValue(surface, kIOSurfaceColorSpace).map { IOSurfaceSetValue(copy, kIOSurfaceColorSpace, $0) }
+        IOSurfaceLock(surface, .readOnly, nil)
+        IOSurfaceLock(copy, [], nil)
+        memcpy(IOSurfaceGetBaseAddress(copy), IOSurfaceGetBaseAddress(surface), row * height)
+        IOSurfaceUnlock(copy, [], nil)
+        IOSurfaceUnlock(surface, .readOnly, nil)
+        return copy
+    }
+
     func setVisible(_ visible: Bool) { surface.map { ghostty_surface_set_occlusion($0, visible) } }
 
 
@@ -233,7 +248,7 @@ final class SurfaceView: NSView, NSTextInputClient {
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         mouseMoved(with: event)
-        if UserDefaults.standard.bool(forKey: ClaudeTTY.followKey), window?.isKeyWindow == true || probe != nil, window?.firstResponder is SurfaceView { window?.makeFirstResponder(self) }
+        if UserDefaults.standard.bool(forKey: ClaudeTTY.followKey), window?.isKeyWindow == true || probe != nil, let keys = window?.firstResponder as? SurfaceView, !sequence(first: keys as NSView, next: \.superview).contains(where: { $0 is Scratch }) { window?.makeFirstResponder(self) }
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -327,6 +342,8 @@ final class SurfaceView: NSView, NSTextInputClient {
             return ghostty_surface_key_is_binding(surface, keyEvent, &flags)
         }
         if isBinding {
+            if event.characters == "j", event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+               NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return true }
             if flags.rawValue & (GHOSTTY_BINDING_FLAGS_ALL.rawValue | GHOSTTY_BINDING_FLAGS_PERFORMABLE.rawValue) == 0, flags.rawValue & GHOSTTY_BINDING_FLAGS_CONSUMED.rawValue != 0,
                NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return true }
             keyDown(with: event)

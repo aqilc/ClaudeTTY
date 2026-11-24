@@ -1,6 +1,8 @@
 zmx #294: Daemon.deinit freed socket_path, which the caller allocated before the fork with another allocator (Daemon.init: "Caller is responsible for freeing all variables passed into the init fn"); every session exit aborted in libmalloc.
 The daemon compresses its scrollback once output rests a second, as the app's renderer does (Terminal.compress): zmx never called it, so a long-scrollback tab's daemon kept every page resident.
 A session a zmx 0.8 daemon serves (ClaudeTTY 1.2.3 and older made it) is reached in its frames (ipc.legacy): 0.8 frames its header as a packed { tag, len: u32 } in the same 8 bytes, so it reads our protocol version byte as a payload length and never answers ours; every payload a ClaudeTTY command sends is already 0.8's. `zmx list` probes it again in its frames and marks it zmx=0.8.
+A leader that leaves hands the pty to the newest terminal client still attached, which sends its size at once: a paired Mac's smaller window left the host's own at that size until a key was typed there (plan-1.3 S50).
+A SIGTERMed daemon logs its sender's pid (si_pid, kept by the SA_SIGINFO handler) and name: macOS records no kill() sender, so a tab's daemon killed at 11-21 01:46 named nobody.
 diff --git a/src/ipc.zig b/src/ipc.zig
 index ad05c2b..5cb0c64 100644
 --- a/src/ipc.zig
@@ -95,7 +97,7 @@ index ad05c2b..5cb0c64 100644
      var info_result: ?Info = null;
      var labels: ?[]const u8 = null;
 diff --git a/src/loop.zig b/src/loop.zig
-index f5d6708..53856e6 100644
+index f5d6708..cd83f9d 100644
 --- a/src/loop.zig
 +++ b/src/loop.zig
 @@ -262,6 +262,9 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
@@ -108,20 +110,30 @@ index f5d6708..53856e6 100644
      daemon_loop: while (daemon.running) {
          // If the program asked for focus reports (DECSET 1004), send focus-out
          // when the last attached client leaves and focus-in when one returns,
-@@ -304,7 +307,11 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
+@@ -304,13 +307,19 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
              });
          }
- 
+
 -        _ = try lib_posix.poll(poll_fds.items, -1);
 +        const timeout: i32 = if (!compress_due) -1 else if (compressing) 0 else 1000;
 +        if (try lib_posix.poll(poll_fds.items, timeout) == 0) {
 +            compressing = term.compress(.incremental) == .pending;
 +            compress_due = compressing;
 +        }
- 
+
          if (poll_fds.items[2].revents & lib_posix.POLL.IN != 0) {
              signal.drainSignalPipe() catch {};
-@@ -367,6 +374,8 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
++            const sender = signal.term_sender.load(.monotonic);
++            var name_buf: [4096]u8 = undefined;
+             std.log.info(
+-                "SIGTERM received, shutting down gracefully session={s}",
+-                .{daemon.session_name},
++                "SIGTERM received from pid={d} ({s}), shutting down gracefully session={s}",
++                .{ sender, signal.processName(sender, &name_buf), daemon.session_name },
+             );
+             break :daemon_loop;
+         }
+@@ -367,6 +376,8 @@ fn daemonLoop(daemon: *Daemon, gpa: std.mem.Allocator, io: std.Io, server_sock_f
                  } else {
                      // Feed PTY output to terminal emulator for state tracking
                      vt_stream.nextSlice(buf[0..n]);
@@ -130,7 +142,7 @@ index f5d6708..53856e6 100644
                      daemon.setPwd(&term);
                      daemon.has_pty_output = true;
  
-@@ -652,7 +661,6 @@ pub const Daemon = struct {
+@@ -652,7 +663,6 @@ pub const Daemon = struct {
          }
          self.labels.deinit(gpa);
          self.pty_write_buf.deinit(gpa);
@@ -138,7 +150,31 @@ index f5d6708..53856e6 100644
      }
  
      pub fn shutdown(self: *Daemon, gpa: std.mem.Allocator) void {
-@@ -1506,7 +1514,7 @@ test "handleEnvGet returns leader client's environment variables including unset
+@@ -687,8 +697,9 @@ pub const Daemon = struct {
+ 
+     pub fn closeClient(self: *Daemon, gpa: std.mem.Allocator, client: *Client, i: usize, shutdown_on_last: bool) bool {
+         const fd = client.socket_fd;
++        const led = self.leader_client_fd == fd;
+         // leader is disconnected, remove ref and let another client claim leader on input
+-        if (self.leader_client_fd == client.socket_fd) {
++        if (led) {
+             std.log.info(
+                 "unsetting leader session={s} fd={d}",
+                 .{ self.session_name, client.socket_fd },
+@@ -699,6 +710,12 @@ pub const Daemon = struct {
+         gpa.destroy(client);
+         _ = self.clients.orderedRemove(i);
+         std.log.info("client disconnected fd={d} remaining={d}", .{ fd, self.clients.items.len });
++        var j = self.clients.items.len;
++        while (led and j > 0) : (j -= 1) {
++            if (!self.clients.items[j - 1].is_terminal) continue;
++            self.setLeader(gpa, self.clients.items[j - 1]) catch {};
++            break;
++        }
+         if (shutdown_on_last and self.clients.items.len == 0) {
+             self.shutdown(gpa);
+             return true;
+@@ -1506,7 +1523,7 @@ test "handleEnvGet returns leader client's environment variables including unset
          .cfg = &cfg,
          .clients = .empty,
          .session_name = "test",
@@ -182,6 +218,52 @@ index 183b736..70eee99 100644
  
      const log_path = try std.fs.path.join(gpa, &.{ cfg.log_dir, "zmx.log" });
      defer gpa.free(log_path);
+diff --git a/src/signal.zig b/src/signal.zig
+--- a/src/signal.zig
++++ b/src/signal.zig
+@@ -1,4 +1,5 @@
+ const std = @import("std");
++const builtin = @import("builtin");
+ const lib_posix = @import("posix.zig");
+
+ /// Self-pipe woken by signal handlers. std.posix.poll loops on .INTR internally
+@@ -6,8 +7,11 @@
+ /// never surfaces; the handler writes a byte here and poll() wakes on POLLIN.
+ pub var sig_pipe: [2]lib_posix.fd_t = .{ -1, -1 };
+
+-pub fn wakeSignalPipe(sig: lib_posix.SIG, _: *const lib_posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
++pub var term_sender = std.atomic.Value(std.c.pid_t).init(0);
++
++pub fn wakeSignalPipe(sig: lib_posix.SIG, info: *const lib_posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+     const saved = std.c._errno().*;
++    if (builtin.os.tag.isDarwin() and sig == .TERM) term_sender.store(info.pid, .monotonic);
+     const byte = [_]u8{@intCast(@backingInt(sig))};
+     _ = std.c.write(sig_pipe[1], &byte, 1);
+     std.c._errno().* = saved;
+@@ -25,6 +29,23 @@
+     lib_posix.sigaction(@as(lib_posix.SIG, @fromBackingInt(@intCast(sig))), &act, null);
+ }
+
++extern "c" fn proc_name(pid: c_int, buffer: [*]u8, buffersize: u32) c_int;
++
++pub fn processName(pid: std.c.pid_t, buf: []u8) []const u8 {
++    var mib = [_]c_int{ 1, 49, pid };
++    var need: usize = 0;
++    var len = buf.len;
++    if (std.c.sysctl(&mib, mib.len, null, &need, null, 0) == 0 and need <= buf.len and
++        std.c.sysctl(&mib, mib.len, buf.ptr, &len, null, 0) == 0 and len > @sizeOf(c_int))
++    {
++        var args = std.mem.tokenizeScalar(u8, buf[@sizeOf(c_int)..len], 0);
++        _ = args.next();
++        if (args.next()) |arg0| return std.fs.path.basename(arg0);
++    }
++    const n = proc_name(pid, buf.ptr, @intCast(buf.len));
++    return if (n > 0) buf[0..@intCast(n)] else "?";
++}
++
+ pub fn ignoreSigpipe() void {
+     const act: lib_posix.Sigaction = .{
+         .handler = .{ .handler = lib_posix.SIG.IGN },
 diff --git a/src/util.zig b/src/util.zig
 index d036f13..1ff7869 100644
 --- a/src/util.zig

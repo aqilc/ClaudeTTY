@@ -16,23 +16,29 @@ if [[ -z $SIGN ]]; then
     security import $T/id.p12 -P x -T /usr/bin/codesign; rm -rf $T
   fi
 fi
-swift build -c release
+[[ -z ${HEAVY_SLOT-} ]] || ~/.claude/scripts/heavy.sh cores 2 >/dev/null || true
+swift build -c release $(sandbox-exec -n no-network true 2>/dev/null || print -- --disable-sandbox)
 rm -rf "${APP:?}.new" "${APP:?}.old"; mkdir -p $APP.new/Contents/MacOS
 cp .build/release/ClaudeTTY $APP.new/Contents/MacOS/
 D=~/Library/Caches/claudetty-deps; mkdir -p $APP.new/Contents/{Helpers,Resources}
 cp $D/zmx-1.0/zig-out/bin/zmx $APP.new/Contents/Helpers/; cp -R $D/ghostty-1.4/zig-out/share/{ghostty,terminfo} $APP.new/Contents/Resources/
-T=$APP.new/Contents/Resources/ghostty/themes; for f in $T/*(.); do print -r -- ${f:t}; cat $f; printf '\0'; done > $T.pack; rm -rf "${T:?}"
+zmodload zsh/mapfile
+T=$APP.new/Contents/Resources/ghostty/themes; for f in $T/*(.); do print -rn -- ${f:t}$'\n'$mapfile[$f]$'\0'; done > $T.pack; rm -rf "${T:?}"
 strip -x $APP.new/Contents/MacOS/ClaudeTTY $APP.new/Contents/Helpers/zmx
-I=$D/icon-$(shasum icon.swift | cut -c1-12).icns
-[[ -f $I ]] || { rm -rf $D/icon.iconset; swift icon.swift $D/icon.iconset && iconutil -c icns $D/icon.iconset -o $I; }
+I=ClaudeTTY.icns
+if [[ -f icon.swift ]]; then
+  I=$D/icon-$(shasum icon.swift | cut -c1-12).icns
+  [[ -f $I ]] || { rm -rf $D/icon.iconset; swift icon.swift $D/icon.iconset && iconutil -c icns $D/icon.iconset -o $I; }
+fi
 cp $I $APP.new/Contents/Resources/ClaudeTTY.icns
-M=$APP.new/Contents/Resources/plugin; mkdir -p $M/.claude-plugin; cp -R plugin $M/claudetty
+M=$APP.new/Contents/Resources/plugin; mkdir -p $M/.claude-plugin; rsync -a --exclude /tests plugin/ $M/claudetty
 print '{"name":"claudetty","owner":{"name":"ClaudeTTY"},"plugins":[{"name":"claudetty","source":"./claudetty"}]}' > $M/.claude-plugin/marketplace.json
-plutil -replace version -string $(cd plugin && find . -type f | sort | xargs cat | shasum | cut -c1-12) $M/claudetty/.claude-plugin/plugin.json
+plutil -replace version -string $(cd plugin && find . -type f ! -path ./tests/\* | sort | xargs cat | shasum | cut -c1-12) $M/claudetty/.claude-plugin/plugin.json
 P=$APP.new/Contents/Info.plist; plutil -create xml1 $P
-for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.5.1 CFBundleVersion 22 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
+for k v in CFBundleIdentifier dev.claudetty.app CFBundleName ClaudeTTY CFBundleShortVersionString 1.2.6 CFBundleVersion 23 CFBundleExecutable ClaudeTTY CFBundleIconFile ClaudeTTY CFBundlePackageType APPL LSMinimumSystemVersion 26.0; do plutil -insert $k -string $v $P; done
 [[ -n ${CLAUDETTY_RELEASE-} ]] || plutil -insert ClaudeTTYSource -string $PWD $P
-plutil -insert NSServices -json '[{"NSMenuItem":{"default":"New ClaudeTTY Tab Here"},"NSMessage":"newTabHere","NSPortName":"ClaudeTTY","NSSendFileTypes":["public.folder"],"NSUserData":"shell"},{"NSMenuItem":{"default":"New Claude Tab Here"},"NSMessage":"newTabHere","NSPortName":"ClaudeTTY","NSSendFileTypes":["public.folder"],"NSUserData":"claude"}]' $P
+[[ $APP == /Applications/ClaudeTTY.app || -n ${CLAUDETTY_RELEASE-} ]] && C='"NSRequiredContext":{},' || C=
+plutil -insert NSServices -json '[{'$C'"NSMenuItem":{"default":"New ClaudeTTY Tab Here"},"NSMessage":"newTabHere","NSPortName":"ClaudeTTY","NSSendFileTypes":["public.folder"],"NSUserData":"shell"},{'$C'"NSMenuItem":{"default":"New Claude Tab Here"},"NSMessage":"newTabHere","NSPortName":"ClaudeTTY","NSSendFileTypes":["public.folder"],"NSUserData":"claude"}]' $P
 plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"ct","CFBundleURLSchemes":["ct"]}]' $P
 for k in AppBundles AppData AppleEvents AppleMusic AudioCapture BluetoothAlways BluetoothWhileInUse Calendars CalendarsFullAccess CalendarsWriteOnlyAccess \
   Camera Contacts DesktopFolder DocumentsFolder DownloadsFolder FaceID FileProviderDomain FileProviderPresence FinancialData FocusStatus HomeKit LocalNetwork \
@@ -51,4 +57,8 @@ if [[ -d $APP ]]; then mv $APP $APP.old; fi
 mv $APP.new $APP
 rm -rf "${APP:?}.old"
 [[ -z ${CLAUDETTY_RELEASE-} ]] || exit 0
+[[ $APP == /Applications/ClaudeTTY.app ]] || exit 0
 launchctl kickstart -k gui/$UID/dev.claudetty.keeper 2>/dev/null || true
+J=~/.claude/plugins; S=$(plutil -extract 'plugins.claudetty@claudetty-src.0.installPath' raw $J/installed_plugins.json 2>/dev/null) || exit 0
+L=$(plutil -extract 'claudetty-src.installLocation' raw $J/known_marketplaces.json)
+[[ ! -d $L/plugin || ! -d $S ]] || rsync -a --delete $L/plugin/ $S/

@@ -8,7 +8,7 @@ You don't need to install it yourself. The app installs it on launch and updates
 What It Runs
 ------------
 
-Every hook runs [`hooks/status.sh`](hooks/status.sh) with `sh`. It needs `jq`, makes no network calls and only writes under `~/Library/Caches/claudetty/status/`, one set of small files per tab:
+The hooks run [`hooks/status.sh`](hooks/status.sh) with `sh`, except one (below). It needs `jq`, makes no network calls and only writes under `~/Library/Caches/claudetty/status/`, one set of small files per tab:
 
 - the tab's state, and the line the sidebar shows under it (a Bash command's description, a file tool's file name, or the question Claude is asking)
 - the tab's notice when Claude sends a push notification or asks you something
@@ -21,6 +21,8 @@ There are two cases where it answers a tool call instead of just watching:
 
 - A `PushNotification` in a tab you muted from its right-click menu gets denied, which also stops the push to your phone.
 - A `SendMessage` to a session that's asleep in a ClaudeTTY tab wakes that tab with `ct`, reading the app's `state.json` and `~/.claude/sessions/` to find it, and waits up to 2 minutes for it to come back before sending. If it doesn't wake, the send gets denied with a note to retry. This one runs from any terminal.
+
+The other one, [`hooks/compact.ts`](hooks/compact.ts), is a Claude Code mod. When the session in a tab has sat idle for 55 minutes with at least 50k tokens of context, it tells Claude the prompt cache goes cold in about 5 minutes, and Claude can type `/compact` into its own tab while compacting is still cheap. It does that once, then waits for you to send something again. If you use [cache-tax](https://github.com/karanb192/claude-code-mods)'s keepwarm, the hour counts from its last ping.
 
 The `ct` Skill
 --------------

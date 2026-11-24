@@ -6,12 +6,17 @@ if [ "$1" = send ]; then
   tab=$(jq -r --arg to "$to" 'first(.kept[]? | select(.labels.sleep != null and (.labels.sleep == $to or .name == $to))) | "\(.group)\t\(.name)"' "$app/state.json" 2>/dev/null)
   [ -n "$tab" ] || exit 0
   group=${tab%%"	"*} tab=${tab#*"	"}
+  listens() {
+    for f in $(grep -lF "\"name\":\"$to\"" "$HOME"/.claude/sessions/*.json 2>/dev/null); do
+      jq -r '"\(.pid) \(.messagingSocketPath)"' "$f" | { read -r pid sock; kill -0 "$pid" 2>/dev/null && [ -S "$sock" ]; } && return 0
+    done
+    return 1
+  }
+  listens && exit 0
   "$HOME/.local/bin/ct" "$group" "$tab" >&2
   i=0
   while [ $i -lt 240 ]; do
-    for f in $(grep -lF "\"name\":\"$to\"" "$HOME"/.claude/sessions/*.json 2>/dev/null); do
-      jq -r '"\(.pid) \(.messagingSocketPath)"' "$f" | { read -r pid sock; kill -0 "$pid" 2>/dev/null && [ -S "$sock" ]; } && [ "$(cat "$dir/$tab" 2>/dev/null)" = idle ] && exit 0
-    done
+    listens && [ "$(cat "$dir/$tab" 2>/dev/null)" = idle ] && exit 0
     sleep 0.5; i=$((i+1))
   done
   jq -nc --arg r "$to was asleep in ClaudeTTY tab $tab and hasn't woken within 2 min. Retry the SendMessage." '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
@@ -19,7 +24,8 @@ if [ "$1" = send ]; then
 fi
 [ -n "$ZMX_SESSION" ] || exit 0
 input=$(cat)
-[ "$1" = working ] && printf %s "$input" | jq -e 'has("agent_id")' >/dev/null 2>/dev/null && exit 0
+agent=$(printf %s "$input" | jq -r '.agent_id // empty' 2>/dev/null)
+[ "$1" = working ] && [ -n "$agent" ] && ! tail -n 1 "$dir/$ZMX_SESSION.action" 2>/dev/null | grep -qF "	$agent" && exit 0
 case "$1" in idle|agent|compact*|"") event=$(printf %s "$input" | jq -r .hook_event_name);; esac
 [ -d "$dir" ] || mkdir -p "$dir"
 status=; { read -r status < "$dir/$ZMX_SESSION"; } 2>/dev/null
@@ -50,15 +56,21 @@ case "$1" in working) line=$([ "$event" = PreCompact ] && echo Compacting || ech
     elif .hook_event_name == "Notification" then .message
     elif .tool_name == "Bash" then .tool_input.description // "Bash"
     elif (.tool_input.file_path // "") != "" then "\(.tool_name) \(.tool_input.file_path | split("/") | last)"
-    else .tool_name end | gsub("[\t\n]+"; " ")) + if $kind == "action" then "\t\($dots)" else "" end')
+    else .tool_name end | gsub("[\t\n]+"; " ")) + if $kind == "action" then "\t\($dots)" elif .agent_id then "\t\(.agent_id)" else "" end')
   [ -n "$line" ] || exit 0;;
 esac
 top=; { read -r top < "$dir/.$ZMX_SESSION.top"; } 2>/dev/null
 if [ "$top" != "$CLAUDE_PID" ]; then
-  ps -E -ww -o command= -p "$CLAUDE_PID" | tr ' ' '\n' | grep -q '^CLAUDE_PID=' && exit 0
+  tab=$("$HOME/.local/bin/zmx" list 2>/dev/null | awk -F'\t' -v t="$ZMX_SESSION" '{ n = $1; sub(/^.*name=/, "", n) } n == t { for (i = 2; i <= NF; i++) if ($i ~ /^pid=/) print substr($i, 5) }')
+  [ -n "$tab" ] || exit 0
+  [ "$CLAUDE_PID" = "$tab" ] || { [ ! -f "$HOME/.claude/sessions/$tab.json" ] && pgrep -a -P "$tab" | grep -qx "$CLAUDE_PID"; } || exit 0
   printf '%s\n' "$CLAUDE_PID" > "$dir/.$ZMX_SESSION.top"
 fi
-case "$event" in SessionStart|SessionEnd) "$HOME/.local/bin/zmx" set "$ZMX_SESSION" "claude=$([ "$event" = SessionStart ] && printf %s "$input" | jq -r .session_id)" >/dev/null;; esac
+id=$(printf %s "$input" | jq -r '.session_id // empty')
+case "$event" in
+  SessionStart) "$HOME/.local/bin/zmx" set "$ZMX_SESSION" "claude=$id" >/dev/null;;
+  SessionEnd) "$HOME/.local/bin/zmx" list 2>/dev/null | grep -q "name=$ZMX_SESSION	.*claude=$id" && "$HOME/.local/bin/zmx" set "$ZMX_SESSION" "claude=" >/dev/null;;
+esac
 transcript="$dir/$ZMX_SESSION.transcript"
 if [ "$event" = SessionStart ] || { [ "$1" = working ] && [ ! -f "$transcript" ]; }; then
   printf %s "$input" | jq -j '.transcript_path // empty' > "$transcript.$$" && mv "$transcript.$$" "$transcript"
@@ -92,6 +104,7 @@ new=$(printf %s "$input" | jq -r --arg old "$old" --arg now "$(date +%s)" --arg 
 [ "$new" = "$old" ] || { printf '%s\n' "$new" > "$agents.tmp" && mv "$agents.tmp" "$agents"; }
 fi
 [ "$event" = SessionStart ] && [ "$(printf %s "$input" | jq -r .source)" = compact ] && exit 0
+[ "$event" = Stop ] && [ "$status" = waiting ] && tail -n 1 "$dir/$ZMX_SESSION.action" 2>/dev/null | grep -q '	[0-9a-f]\{8,\}$' && exit 0
 [ "$1" = idle ] && rm -f "$dir/$ZMX_SESSION.action"
 case "$1" in working|action|waiting)
   [ "$1" = waiting ] && last=$(head -n 1 "$dir/$ZMX_SESSION.action" 2>/dev/null)
@@ -101,6 +114,8 @@ esac
 case "$1/$event" in agent/*) exit 0;; working/) [ "$status" = working ] && exit 0;; */Stop) [ "$status" = "$1" ] && exit 0;; esac
 if [ "$1" = waiting ]; then
   "$HOME/.local/bin/zmx" get "$ZMX_SESSION" | tr ' \t' '\n\n' | grep -qx notify=0 || { printf %s "$line" > "$dir/.$ZMX_SESSION.notice.$$" && mv "$dir/.$ZMX_SESSION.notice.$$" "$dir/$ZMX_SESSION.notice" && : > "$dir/$ZMX_SESSION.asked"; }
+elif [ "$event" = StopFailure ]; then
+  "$HOME/.local/bin/zmx" get "$ZMX_SESSION" | tr ' \t' '\n\n' | grep -qx notify=0 || { printf %s "$input" | jq -j '(.last_assistant_message // "" | select(. != "")) // ({rate_limit: "Hit a usage limit", overloaded: "Claude is overloaded", authentication_failed: "Signed out", oauth_org_not_allowed: "Organization not allowed", account_on_hold: "Account on hold", billing_error: "Billing problem", invalid_request: "Invalid request", model_not_found: "Model not found", server_error: "Server error", max_output_tokens: "Reply too long", cloud_credential_error: "Cloud sign-in failed"}[.error // ""] // "Stopped on an error")' > "$dir/.$ZMX_SESSION.notice.$$" && mv "$dir/.$ZMX_SESSION.notice.$$" "$dir/$ZMX_SESSION.notice" && rm -f "${dir:?}/$ZMX_SESSION.asked"; }
 elif [ "$status" = waiting ] && [ -f "$dir/$ZMX_SESSION.asked" ]; then
   rm -f "$dir/$ZMX_SESSION.notice" "$dir/$ZMX_SESSION.asked"
 fi
